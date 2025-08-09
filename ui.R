@@ -117,6 +117,41 @@ Before running the GMM, the data is preprocessed: the selected value's column is
       )
     )
   ),
+  
+  # New tab for Parallel RefineR Analysis
+  tabPanel(
+    title = "Parallel Analysis",
+    useShinyjs(),
+    sidebarLayout(
+      sidebarPanel(
+        style = "padding-right: 15px;",
+        p("Enter one or more age ranges for each gender below, separated by commas.
+          Example: 0-10, 10-20, 20-30"),
+        textAreaInput(inputId = "male_age_ranges",
+                      label = "Male Age Ranges:",
+                      rows = 3,
+                      placeholder = "e.g., 0-10, 10-20"),
+        textAreaInput(inputId = "female_age_ranges",
+                      label = "Female Age Ranges:",
+                      rows = 3,
+                      placeholder = "e.g., 0-10, 10-20"),
+        fileInput(inputId = "parallel_file", label = "Upload Data (Excel File)", accept = c(".xlsx")),
+        selectInput(inputId = "parallel_col_value", label = "Select Column for Values:", choices = c("None" = ""), selected = ""),
+        selectInput(inputId = "parallel_col_age", label = "Select Column for Age:", choices = c("None" = ""), selected = ""),
+        selectInput(inputId = "parallel_col_gender", label = "Select Column for Gender:", choices = c("None" = ""), selected = ""),
+        radioButtons(inputId = "parallel_model_choice", label = "Select Transformation Model:",
+                     choices = c("BoxCox" = "BoxCox", "modBoxCox" = "modBoxCox"),
+                     selected = "BoxCox", inline = TRUE),
+        hr(),
+        actionButton("run_parallel_btn", "Run Parallel Analysis", class = "btn-primary"),
+        actionButton("reset_parallel_btn", "Reset", class = "btn-secondary"),
+        uiOutput("parallel_message")
+      ),
+      mainPanel(
+        uiOutput("parallel_results_ui")
+      )
+    )
+  ),
 
   # Footer of the application with copyright and a link to the author's GitHub
   footer = tags$footer(
