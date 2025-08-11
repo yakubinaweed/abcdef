@@ -3,6 +3,22 @@
 # It handles data upload, defining subpopulations, running multiple refineR models,
 # and rendering the results for each subpopulation.
 
+# Load all necessary libraries.
+library(shiny)
+library(readxl)
+library(tidyverse)
+library(refineR)
+library(shinyjs)
+library(shinyWidgets)
+library(bslib)
+library(ggplot2)
+library(future)       # Added for future-based parallel processing
+library(future.apply) # Added to use future_lapply
+
+# Set the parallelization plan
+# multisession is the most robust option for all operating systems.
+plan(multisession)
+
 # =========================================================================
 # UTILITY FUNCTIONS FOR PARALLEL ANALYSIS
 # =========================================================================
@@ -19,8 +35,6 @@ guess_column <- function(cols_available, common_names) {
 }
 
 # Function to filter data based on gender and age
-# It takes a data frame, gender choice, age range, and column names for gender and age.
-# It returns a filtered data frame with a standardized 'Gender_Standardized' column.
 filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_age) {
   if (col_age == "") {
     stop("Age column not found in data.")
@@ -29,7 +43,6 @@ filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_a
   filtered_data <- data %>%
     filter(!!rlang::sym(col_age) >= age_min & !!rlang::sym(col_age) <= age_max)
 
-  # Check if a gender column is selected
   if (col_gender != "" && col_gender %in% names(data)) {
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = case_when(
@@ -46,7 +59,6 @@ filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_a
         ))
     }
   } else {
-    # If no gender column is selected, create a dummy 'Combined' gender column
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = "Combined")
   }
@@ -54,16 +66,15 @@ filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_a
   return(filtered_data)
 }
 
-# This function is a wrapper for a single refineR analysis,
-# allowing us to easily apply it to multiple subpopulations.
-run_single_refiner_analysis <- function(data, subpopulation, col_value, col_age, col_gender, model_choice) {
+# This function is a wrapper for a single refineR analysis.
+# It now only returns the non-reactive model object.
+run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age, col_gender, model_choice) {
   gender <- subpopulation$gender
   age_min <- subpopulation$age_min
   age_max <- subpopulation$age_max
   label <- paste0(gender, " (", age_min, "-", age_max, ")")
 
   tryCatch({
-    # Filter the data for the specific subpopulation
     filtered_data <- filter_data(data,
                                  gender_choice = ifelse(gender == "Both", "Both", substr(gender, 1, 1)),
                                  age_min = age_min,
@@ -77,34 +88,17 @@ run_single_refiner_analysis <- function(data, subpopulation, col_value, col_age,
 
     # Run the refineR model
     model <- refineR::findRI(Data = filtered_data[[col_value]],
-                             NBootstrap = 1, # Using fast bootstrap for demo
+                             NBootstrap = 1,
                              model = model_choice)
 
     if (is.null(model) || inherits(model, "try-error")) {
       stop(paste("RefineR model could not be generated for subpopulation:", label))
     }
 
-    # Create plot and summary
-    plot_title <- paste0("RefineR Analysis for ", label)
-
-    # Store plot and summary
-    plot_output <- reactive({
-      req(model)
-      plot(model, showCI = TRUE, RIperc = c(0.025, 0.975), showPathol = FALSE,
-           title = plot_title,
-           xlab = paste0(col_value, " (", col_value, ")"))
-    })
-
-    summary_output <- reactive({
-      req(model)
-      print(summary(model))
-    })
-
+    # Return the non-reactive model object and label
     list(
       label = label,
       model = model,
-      plot_output = plot_output,
-      summary_output = summary_output,
       status = "success",
       message = "Analysis complete."
     )
@@ -204,35 +198,42 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     shinyjs::runjs("$('#run_parallel_btn').text('Analyzing...');")
     session$sendCustomMessage('analysisStatus', TRUE)
 
-    # Run analysis with a for loop to correctly manage progress
-    results_list <- list()
-    total_subpopulations <- length(subpopulations)
-    withProgress(message = 'Running Parallel Analysis', value = 0, {
-      for (i in 1:total_subpopulations) {
-        sub <- subpopulations[[i]]
-        # Update progress bar
-        incProgress(1/total_subpopulations, detail = paste("Analyzing", sub$gender, "ages", sub$age_min, "to", sub$age_max, "..."))
+    # Capture input values outside of the future_lapply call
+    data_to_analyze <- parallel_data_rv()
+    col_value_input <- input$parallel_col_value
+    col_age_input <- input$parallel_col_age
+    col_gender_input <- input$parallel_col_gender
+    model_choice_input <- input$parallel_model_choice
 
-        # Run the analysis for the current subpopulation
-        result <- run_single_refiner_analysis(
-          data = parallel_data_rv(),
+    # Use future_lapply for parallel processing.
+    withProgress(message = 'Running Parallel Analysis', value = 0, {
+      results_list <- future_lapply(subpopulations, function(sub) {
+        run_single_refiner_analysis(
           subpopulation = sub,
-          col_value = input$parallel_col_value,
-          col_age = input$parallel_col_age,
-          col_gender = input$parallel_col_gender,
-          model_choice = input$parallel_model_choice
+          data = data_to_analyze,
+          col_value = col_value_input,
+          col_age = col_age_input,
+          col_gender = col_gender_input,
+          model_choice = model_choice_input
         )
-        results_list[[i]] <- result
-      }
+      }, future.seed = TRUE)
+      
+      parallel_results_rv(results_list)
+      incProgress(1, detail = "Analysis complete!")
     })
-    parallel_results_rv(results_list)
 
     # Finalize analysis
     analysis_running_rv(FALSE)
     shinyjs::enable("run_parallel_btn")
     shinyjs::runjs("$('#run_parallel_btn').text('Run Parallel Analysis');")
     session$sendCustomMessage('analysisStatus', FALSE)
-    parallel_message_rv(list(text = "Parallel analysis complete!", type = "success"))
+
+    # Check if all tasks failed
+    if (all(sapply(parallel_results_rv(), function(r) r$status == "error"))) {
+      parallel_message_rv(list(text = "Parallel analysis failed for all subpopulations.", type = "error"))
+    } else {
+      parallel_message_rv(list(text = "Parallel analysis complete!", type = "success"))
+    }
   })
 
   # Observer for the Reset button
@@ -273,7 +274,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     do.call(tagList, result_elements)
   })
 
-  # Dynamic rendering of plots and summaries
+  # Dynamic rendering of plots and summaries in the main session
   observe({
     results <- parallel_results_rv()
     if (length(results) > 0) {
@@ -282,13 +283,21 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         if (result$status == "success") {
           output_id_plot <- paste0("parallel_plot_", i)
           output_id_summary <- paste0("parallel_summary_", i)
-
+          model <- result$model
+          
+          # Create plot reactively in the main session
           output[[output_id_plot]] <- renderPlot({
-            result$plot_output()
+            req(model)
+            plot_title <- paste0("RefineR Analysis for ", result$label)
+            plot(model, showCI = TRUE, RIperc = c(0.025, 0.975), showPathol = FALSE,
+                 title = plot_title,
+                 xlab = paste0(input$parallel_col_value, " (", input$parallel_col_value, ")"))
           })
-
+          
+          # Create summary reactively in the main session
           output[[output_id_summary]] <- renderPrint({
-            result$summary_output()
+            req(model)
+            print(summary(model))
           })
         }
       })
