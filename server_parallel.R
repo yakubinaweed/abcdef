@@ -1,173 +1,332 @@
+# server_parallel.R
+# This module contains the logic for the "Parallel Analysis" tab.
+# It handles data upload, defining subpopulations, running multiple refineR models,
+# and rendering the results for each subpopulation.
+
+# Load all necessary libraries.
 library(shiny)
-library(bslib)
-library(refineR)
 library(readxl)
-library(moments)
+library(tidyverse)
+library(refineR)
 library(shinyjs)
 library(shinyWidgets)
-library(shinyFiles)
+library(bslib)
 library(ggplot2)
+library(future)       # Added for future-based parallel processing
+library(future.apply) # Added to use future_lapply
 
-ui <- navbarPage(
-  title = "RefineR Reference Interval Estimation",
-  id = "tabs",
-  # Sets the visual theme and fonts for the Shiny app
-  theme = bs_theme(version = 4, base_font = font_google("Inter"), heading_font = font_google("Rethink Sans"), font_scale = 1.1, bootswatch = "default"),
+# =========================================================================
+# UTILITY FUNCTIONS FOR PARALLEL ANALYSIS
+# =========================================================================
 
-  # First tab for the main RefineR analysis
-  tabPanel(
-    title = "Main Analysis",
-    useShinyjs(),
-    tags$head(
-      # Includes the custom CSS from the 'www' directory
-      includeCSS("www/styles.css")
-    ),
-    # Custom JavaScript to handle disabling the other tab during analysis
-    tags$script(HTML("
-      var analysisRunning = false;
-      Shiny.addCustomMessageHandler('analysisStatus', function(status) {
-        analysisRunning = status;
-        if (status) {
-          // Disable all tab links that are not currently active
-          $('a[data-toggle=\"tab\"]').each(function() {
-            if (!$(this).parent().hasClass('active')) {
-              $(this).addClass('disabled-tab-link');
-            }
-          });
-        } else {
-          // Re-enable all tab links
-          $('a.disabled-tab-link').removeClass('disabled-tab-link');
+# Helper function to guess column names based on common keywords
+guess_column <- function(cols_available, common_names) {
+  for (name in common_names) {
+    match_idx <- grep(paste0("^", name, "$"), cols_available, ignore.case = TRUE)
+    if (length(match_idx) > 0) {
+      return(cols_available[match_idx[1]])
+    }
+  }
+  return("")
+}
+
+# Function to filter data based on gender and age
+filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_age) {
+  if (col_age == "") {
+    stop("Age column not found in data.")
+  }
+
+  filtered_data <- data %>%
+    filter(!!rlang::sym(col_age) >= age_min & !!rlang::sym(col_age) <= age_max)
+
+  if (col_gender != "" && col_gender %in% names(data)) {
+    filtered_data <- filtered_data %>%
+      mutate(Gender_Standardized = case_when(
+        grepl("male|m|man|jongen(s)?|heren|mannelijk(e)?", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Male",
+        grepl("female|f|vrouw(en)?|v|meisje(s)?|dame|mevr|vrouwelijke", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Female",
+        TRUE ~ "Other"
+      ))
+
+    if (gender_choice != "Both") {
+      filtered_data <- filtered_data %>%
+        filter(Gender_Standardized == case_when(
+          gender_choice == "M" ~ "Male",
+          gender_choice == "F" ~ "Female"
+        ))
+    }
+  } else {
+    filtered_data <- filtered_data %>%
+      mutate(Gender_Standardized = "Combined")
+  }
+
+  return(filtered_data)
+}
+
+# A new, more robust function to parse age ranges
+parse_age_ranges <- function(ranges_text, gender) {
+  ranges <- strsplit(ranges_text, ",")[[1]]
+  parsed_ranges <- list()
+  for (range in ranges) {
+    parts <- trimws(strsplit(range, "-")[[1]])
+    if (length(parts) == 2) {
+      age_min <- as.numeric(parts[1])
+      age_max <- as.numeric(parts[2])
+      if (!is.na(age_min) && !is.na(age_max) && age_min <= age_max) {
+        parsed_ranges <- c(parsed_ranges, list(list(gender = gender, age_min = age_min, age_max = age_max)))
+      } else {
+        warning(paste("Invalid numeric range for", gender, ":", range))
+      }
+    } else if (trimws(range) != "") {
+      warning(paste("Invalid format for", gender, ":", range))
+    }
+  }
+  return(parsed_ranges)
+}
+
+# This function is a wrapper for a single refineR analysis, now including bootstrap speed.
+run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age, col_gender, model_choice, nbootstrap_value) {
+  gender <- subpopulation$gender
+  age_min <- subpopulation$age_min
+  age_max <- subpopulation$age_max
+  label <- paste0(gender, " (", age_min, "-", age_max, ")")
+
+  tryCatch({
+    filtered_data <- filter_data(data,
+                                 gender_choice = ifelse(gender == "Both", "Both", substr(gender, 1, 1)),
+                                 age_min = age_min,
+                                 age_max = age_max,
+                                 col_gender = col_gender,
+                                 col_age = col_age)
+
+    if (nrow(filtered_data) == 0) {
+      stop(paste("No data found for subpopulation:", label))
+    }
+    
+    # Run the refineR model
+    model <- refineR::findRI(Data = filtered_data[[col_value]],
+                             NBootstrap = nbootstrap_value,
+                             model = model_choice)
+
+    if (is.null(model) || inherits(model, "try-error")) {
+      stop(paste("RefineR model could not be generated for subpopulation:", label))
+    }
+
+    list(
+      label = label,
+      model = model,
+      status = "success",
+      message = "Analysis complete."
+    )
+
+  }, error = function(e) {
+    list(
+      label = label,
+      status = "error",
+      message = paste("Error:", e$message)
+    )
+  })
+}
+
+# Main server logic for the parallel tab
+parallelServer <- function(input, output, session, parallel_data_rv, parallel_results_rv, parallel_message_rv, analysis_running_rv) {
+
+  # Observer for file upload
+  observeEvent(input$parallel_file, {
+    req(input$parallel_file)
+    tryCatch({
+      data <- readxl::read_excel(input$parallel_file$datapath)
+      parallel_data_rv(data)
+      parallel_message_rv(list(type = "success", text = "Data file uploaded successfully."))
+
+      col_names <- colnames(data)
+      all_col_choices_with_none <- c("None" = "", col_names)
+
+      updateSelectInput(session, "parallel_col_value", choices = all_col_choices_with_none, selected = guess_column(col_names, c("HB_value", "Value", "Result", "Measurement", "Waarde")))
+      updateSelectInput(session, "parallel_col_age", choices = all_col_choices_with_none, selected = guess_column(col_names, c("leeftijd", "age", "AgeInYears", "Years")))
+      updateSelectInput(session, "parallel_col_gender", choices = all_col_choices_with_none, selected = guess_column(col_names, c("geslacht", "gender", "sex", "Gender", "Sex")))
+    }, error = function(e) {
+      parallel_message_rv(list(type = "error", text = paste("Error loading file:", e$message)))
+      parallel_data_rv(NULL)
+    })
+  })
+
+  # Observer for the Run Parallel Analysis button
+  observeEvent(input$run_parallel_btn, {
+    if (analysis_running_rv()) {
+      parallel_message_rv(list(text = "An analysis is already running. Please wait or reset.", type = "warning"))
+      return()
+    }
+
+    # Pre-run checks
+    req(parallel_data_rv(), input$parallel_col_value, input$parallel_col_age)
+    if (input$parallel_col_value == "" || input$parallel_col_age == "") {
+      parallel_message_rv(list(text = "Please select the value and age columns.", type = "error"))
+      return()
+    }
+    
+    subpopulations <- c(
+      parse_age_ranges(input$male_age_ranges, "Male"),
+      parse_age_ranges(input$female_age_ranges, "Female")
+    )
+
+    if (length(subpopulations) == 0) {
+      parallel_message_rv(list(text = "Please enter valid age ranges in the format 'min-max' for at least one gender.", type = "error"))
+      return()
+    }
+
+    # Prepare for analysis
+    parallel_message_rv(list(text = "Starting parallel analysis...", type = "info"))
+    analysis_running_rv(TRUE)
+    shinyjs::disable("run_parallel_btn")
+    shinyjs::runjs("$('#run_parallel_btn').text('Analyzing...');")
+    session$sendCustomMessage('analysisStatus', TRUE)
+
+    # Capture input values outside of the future_lapply call
+    data_to_analyze <- parallel_data_rv()
+    col_value_input <- input$parallel_col_value
+    col_age_input <- input$parallel_col_age
+    col_gender_input <- input$parallel_col_gender
+    model_choice_input <- input$parallel_model_choice
+    nbootstrap_value_input <- switch(input$parallel_nbootstrap_speed, "Fast" = 1, "Medium" = 50, "Slow" = 200, 1)
+
+    # Set the parallelization plan based on user input for cores
+    plan(multisession, workers = input$cores)
+
+    # Use future_lapply for parallel processing without a progress bar.
+    results_list <- future_lapply(subpopulations, function(sub) {
+      run_single_refiner_analysis(
+        subpopulation = sub,
+        data = data_to_analyze,
+        col_value = col_value_input,
+        col_age = col_age_input,
+        col_gender = col_gender_input,
+        model_choice = model_choice_input,
+        nbootstrap_value = nbootstrap_value_input
+      )
+    }, future.seed = TRUE)
+
+    parallel_results_rv(results_list)
+
+    # Finalize analysis
+    analysis_running_rv(FALSE)
+    shinyjs::enable("run_parallel_btn")
+    shinyjs::runjs("$('#run_parallel_btn').text('Run Parallel Analysis');")
+    session$sendCustomMessage('analysisStatus', FALSE)
+
+    # Check if all tasks failed
+    if (all(sapply(parallel_results_rv(), function(r) r$status == "error"))) {
+      parallel_message_rv(list(text = "Parallel analysis failed for all subpopulations.", type = "error"))
+    } else {
+      parallel_message_rv(list(text = "Parallel analysis complete!", type = "success"))
+    }
+  })
+
+  # Observer for the Reset button
+  observeEvent(input$reset_parallel_btn, {
+    parallel_data_rv(NULL)
+    parallel_results_rv(list())
+    parallel_message_rv(list(type = "", text = ""))
+    shinyjs::reset("parallel_file")
+    updateSelectInput(session, "parallel_col_value", choices = c("None" = ""), selected = "")
+    updateSelectInput(session, "parallel_col_age", choices = c("None" = ""), selected = "")
+    updateSelectInput(session, "parallel_col_gender", choices = c("None" = ""), selected = "")
+    updateRadioButtons(session, "parallel_model_choice", selected = "BoxCox")
+    updateTextAreaInput(session, "male_age_ranges", value = "")
+    updateTextAreaInput(session, "female_age_ranges", value = "")
+  })
+
+  # Dynamic UI to render plots for each subpopulation
+  output$parallel_results_ui <- renderUI({
+    results <- parallel_results_rv()
+    if (length(results) == 0) {
+      return(NULL)
+    }
+
+    result_elements <- lapply(seq_along(results), function(i) {
+      result <- results[[i]]
+      if (result$status == "success") {
+        tagList(
+          h4(result$label),
+          plotOutput(paste0("parallel_plot_", i)),
+          hr()
+        )
+      } else {
+        div(class = "alert alert-danger", result$message)
+      }
+    })
+
+    do.call(tagList, result_elements)
+  })
+
+  # Combined summary output
+  output$combined_summary <- renderPrint({
+    results <- parallel_results_rv()
+    if (is.null(results) || length(results) == 0) {
+      return("No parallel analysis results to display.")
+    }
+
+    cat("--- Combined RefineR Summary ---\n\n")
+
+    for (i in seq_along(results)) {
+      result <- results[[i]]
+      
+      cat("--------------------------------------------------\n")
+      cat("Summary for ", result$label, "\n")
+      cat("--------------------------------------------------\n")
+      
+      if (result$status == "error") {
+        cat("Status: Error\n")
+        cat("Message: ", result$message, "\n\n")
+        next
+      }
+
+      model <- result$model
+      cat("Status: Success\n")
+      cat("Value Column: ", input$parallel_col_value, "\n")
+      cat("Transformation Model: ", input$parallel_model_choice, "\n")
+      cat("N: ", model$N, "\n")
+
+      # Check for valid reference intervals before trying to round
+      if (!is.null(model$RI) && is.numeric(model$RI$RI_low) && is.numeric(model$RI$RI_high)) {
+        cat("Reference Intervals (2.5% to 97.5%):\n")
+        cat("  Lower Limit: ", round(model$RI$RI_low, 3), "\n")
+        cat("  Upper Limit: ", round(model$RI$RI_high, 3), "\n")
+      } else {
+        cat("\nNote: Reference intervals could not be calculated. Please check your data.\n")
+      }
+      cat("\n")
+    }
+  })
+
+  # Dynamic rendering of plots in the main session
+  observe({
+    results <- parallel_results_rv()
+    if (length(results) > 0) {
+      lapply(seq_along(results), function(i) {
+        result <- results[[i]]
+        if (result$status == "success") {
+          output_id_plot <- paste0("parallel_plot_", i)
+          model <- result$model
+          
+          # Create plot reactively in the main session
+          output[[output_id_plot]] <- renderPlot({
+            req(model)
+            
+            # Extract key information for title and axis labels
+            value_col_name <- input$parallel_col_value
+            model_type <- switch(input$parallel_model_choice,
+                                 "BoxCox" = " (BoxCox Transformed)",
+                                 "modBoxCox" = " (modBoxCox Transformed)")
+            
+            plot_title <- paste0("RefineR Analysis for ", value_col_name, model_type, " (", result$label, ")")
+            xlab_text <- paste0(value_col_name, " ", "[", input$parallel_unit_input, "]")
+            
+            plot(model, showCI = TRUE, RIperc = c(0.025, 0.975), showPathol = FALSE,
+                 title = plot_title,
+                 xlab = xlab_text)
+          })
         }
-      });
-      // Event handler to block clicks on disabled tabs
-      $(document).on('click', 'a.disabled-tab-link', function(event) {
-        event.preventDefault();
-        Shiny.setInputValue('tab_switch_blocked', new Date().getTime());
-        return false;
-      });
-    ")),
-    sidebarLayout(
-      sidebarPanel(
-        style = "padding-right: 15px;",
-        # User inputs for data filtering and analysis parameters
-        selectInput(inputId = "gender_choice", label = "Select Gender:", choices = c("Male" = "M", "Female" = "F", "Both" = "Both"), selected = "Both"),
-        sliderInput(inputId = "age_range", label = "Age Range:", min = 0, max = 100, value = c(0, 100), step = 1),
-        fileInput(inputId = "data_file", label = "Upload Data (Excel File)", accept = c(".xlsx")),
-        # Dynamic inputs for selecting data columns
-        selectInput(inputId = "col_value", label = "Select Column for Values:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "col_age", label = "Select Column for Age:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "col_gender", label = "Select Column for Gender:", choices = c("None" = ""), selected = ""),
-        radioButtons(inputId = "nbootstrap_speed", label = "Select Computation Speed:", choices = c("Fast", "Medium", "Slow"), selected = "Fast", inline = TRUE),
-        
-        # New: Radio buttons for model selection (removed "None" option)
-        radioButtons(inputId = "model_choice", label = "Select Transformation Model:",
-                     choices = c("BoxCox" = "BoxCox",
-                                 "modBoxCox" = "modBoxCox"),
-                     selected = "BoxCox", inline = TRUE), # Default to Box-Cox
-        
-        # Action buttons for the analysis
-        actionButton("analyze_btn", "Analyze", class = "btn-primary"),
-        actionButton("reset_btn", "Reset File", class = "btn-secondary"),
-        shinyFiles::shinyDirButton(id = "select_dir_btn", label = "Select Output Directory", title = "Select a directory to save plots", style = "margin-top: 5px;"),
-        div(style = "margin-top: 5px; display: flex; align-items: center; justify-content: flex-start; width: 100%;",
-            prettySwitch(inputId = "enable_directory", label = "Auto-Save Graph", status = "success", fill = TRUE, inline = TRUE)
-        ),
-        uiOutput("app_message"), # Placeholder for displaying app messages
-        hr(),
-        # Inputs for manual reference limits and units for the plot
-        numericInput("ref_low", "Reference Lower Limit:", value = NA),
-        numericInput("ref_high", "Reference Upper Limit:", value = NA),
-        textInput(inputId = "unit_input", label = "Unit of Measurement", value = "mmol/L", placeholder = "ex. g/L")
-      ),
-      mainPanel(
-        # Outputs for the main analysis results
-        plotOutput("result_plot"),
-        verbatimTextOutput("result_text")
-      )
-    )
-  ),
-
-  # Second tab for Gaussian Mixture Model (GMM) subpopulation detection
-  tabPanel(
-    title = "Subpopulation Detection (GMM)",
-    useShinyjs(),
-    p("Gaussian Mixture Models aim to detect hidden subpopulations within your data based on a selected value and age. This tool employs the mclust package, which automatically selects the best model and number of components based on the Bayesian Information Criterion (BIC). For each detected subpopulation, estimated age ranges are provided directly from the model's characteristics, avoiding predefined bins.
-
-Before running the GMM, the data is preprocessed: the selected value's column is conditionally transformed using the Yeo-Johnson method if it shows significant skewness, and both the value and age columns are standardized (z-transformed)."),
-    sidebarLayout(
-      sidebarPanel(
-        fileInput(inputId = "gmm_file_upload", label = "Upload Data (Excel File)", accept = c(".xlsx")),
-        hr(),
-        # Dynamic inputs for selecting Value, Age, and Gender columns for GMM
-        selectInput(inputId = "gmm_value_col", label = "Select Column for Values:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "gmm_age_col", label = "Select Column for Age:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "gmm_gender_col", label = "Select Column for Gender:", choices = c("None" = ""), selected = ""),
-        hr(),
-        # Action buttons for the GMM analysis
-        # New radio buttons for gender selection
-        uiOutput("gmm_gender_choice_ui"),
-        actionButton("run_gmm_analysis_btn", "Analyze", class = "btn-primary"),
-        actionButton("reset_gmm_analysis_btn", "Reset File", class = "btn-secondary"),
-        # Added a div with a top margin to create spacing
-        div(style = "margin-top: 15px;", uiOutput("app_message"))
-      ),
-      mainPanel(
-        # Renders the UI for GMM results dynamically
-        uiOutput("gmm_results_ui")
-      )
-    )
-  ),
-  
-  # New tab for Parallel RefineR Analysis
-  tabPanel(
-    title = "Parallel Analysis",
-    useShinyjs(),
-    sidebarLayout(
-      sidebarPanel(
-        style = "padding-right: 15px;",
-        p("Enter one or more age ranges for each gender below, separated by commas.
-          Example: 0-10, 10-20, 20-30"),
-        textAreaInput(inputId = "male_age_ranges",
-                      label = "Male Age Ranges:",
-                      rows = 3,
-                      placeholder = "e.g., 0-10, 10-20"),
-        textAreaInput(inputId = "female_age_ranges",
-                      label = "Female Age Ranges:",
-                      rows = 3,
-                      placeholder = "e.g., 0-10, 10-20"),
-        fileInput(inputId = "parallel_file", label = "Upload Data (Excel File)", accept = c(".xlsx")),
-        selectInput(inputId = "parallel_col_value", label = "Select Column for Values:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "parallel_col_age", label = "Select Column for Age:", choices = c("None" = ""), selected = ""),
-        selectInput(inputId = "parallel_col_gender", label = "Select Column for Gender:", choices = c("None" = ""), selected = ""),
-        radioButtons(inputId = "parallel_model_choice", label = "Select Transformation Model:",
-                     choices = c("BoxCox" = "BoxCox", "modBoxCox" = "modBoxCox"),
-                     selected = "BoxCox", inline = TRUE),
-        hr(),
-        radioButtons(inputId = "parallel_nbootstrap_speed", label = "Select Computation Speed:", choices = c("Fast", "Medium", "Slow"), selected = "Fast", inline = TRUE),
-        numericInput("cores", "Number of Cores:", value = 2, min = 1),
-        textInput(inputId = "parallel_unit_input", label = "Unit of Measurement", value = "", placeholder = "ex. g/L"),
-        hr(),
-        actionButton("run_parallel_btn", "Run Parallel Analysis", class = "btn-primary"),
-        actionButton("reset_parallel_btn", "Reset", class = "btn-secondary"),
-        uiOutput("parallel_message")
-      ),
-      mainPanel(
-        uiOutput("parallel_results_ui"),
-        verbatimTextOutput("combined_summary")
-      )
-    )
-  ),
-
-  # Footer of the application with copyright and a link to the author's GitHub
-  footer = tags$footer(
-    HTML('© 2025 <a href="https://github.com/yakubinaweed/refineR-reference-interval" target="_blank">Naweed Yakubi</a> • All rights reserved.'),
-    style = "
-      position: relative;
-      bottom: 0;
-      width: 100%;
-      text-align: center;
-      padding: 10px 0;
-      color: #777;
-      font-size: 0.8em;"
-  )
-)
+      })
+    }
+  })
+}
