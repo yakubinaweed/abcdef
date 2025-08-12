@@ -17,7 +17,7 @@ library(ggplot2)
 # Source the server modules for each tab
 source("server_main.R")
 source("server_gmm.R")
-source("server_parallel.R")
+source("server_parallel.R") # <--- ENSURE THIS LINE IS PRESENT AND CORRECT
 
 server <- function(input, output, session) {
   
