@@ -245,8 +245,13 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     result_elements <- lapply(seq_along(results), function(i) {
       result <- results[[i]]
       if (result$status == "success") {
+        # Split the label to get gender and age range parts
+        label_parts <- unlist(strsplit(result$label, " "))
+        gender_part <- label_parts[1]
+        age_range_part <- gsub("[()]", "", label_parts[2])
+
         tagList(
-          h4(result$label),
+          h4(paste0(input$parallel_col_value, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")),
           plotOutput(paste0("parallel_plot_", i)),
           # Add the summary output directly below the plot for this subpopulation
           verbatimTextOutput(paste0("parallel_summary_", i)),
@@ -270,6 +275,11 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
           output_id_plot <- paste0("parallel_plot_", i)
           output_id_summary <- paste0("parallel_summary_", i)
           model <- result$model
+
+          # Split the label to get gender and age range parts
+          label_parts <- unlist(strsplit(result$label, " "))
+          gender_part <- label_parts[1]
+          age_range_part <- gsub("[()]", "", label_parts[2])
           
           # Create plot reactively in the main session
           output[[output_id_plot]] <- renderPlot({
@@ -281,7 +291,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
                                  "BoxCox" = " (BoxCox Transformed)",
                                  "modBoxCox" = " (modBoxCox Transformed)")
             
-            plot_title <- paste0("RefineR Analysis for ", value_col_name, model_type, " (", result$label, ")")
+            plot_title <- paste0("Estimated RI for ", value_col_name, model_type, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")
             xlab_text <- paste0(value_col_name, " ", "[", input$parallel_unit_input, "]")
             
             plot(model, showCI = TRUE, RIperc = c(0.025, 0.975), showPathol = FALSE,
@@ -292,7 +302,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
           # Create summary reactively in the main session
           output[[output_id_summary]] <- renderPrint({
               req(model)
-              cat("--- RefineR Summary for ", result$label, " ---\n")
+              cat("--- RefineR Summary for ", input$parallel_col_value, " (Gender: ", gender_part, ", Age: ", age_range_part, ") ---\n")
               print(model)
           })
         }
