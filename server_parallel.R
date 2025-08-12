@@ -281,19 +281,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
       }
 
       model <- result$model
-      cat("Status: Success\n")
-      cat("Value Column: ", input$parallel_col_value, "\n")
-      cat("Transformation Model: ", input$parallel_model_choice, "\n")
-      cat("N: ", model$N, "\n")
-
-      # Check for valid reference intervals before trying to round
-      if (!is.null(model$RI) && is.numeric(model$RI$RI_low) && is.numeric(model$RI$RI_high)) {
-        cat("Reference Intervals (2.5% to 97.5%):\n")
-        cat("  Lower Limit: ", round(model$RI$RI_low, 3), "\n")
-        cat("  Upper Limit: ", round(model$RI$RI_high, 3), "\n")
-      } else {
-        cat("\nNote: Reference intervals could not be calculated. Please check your data.\n")
-      }
+      print(model)
       cat("\n")
     }
   })
