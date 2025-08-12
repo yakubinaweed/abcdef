@@ -235,7 +235,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     updateTextAreaInput(session, "female_age_ranges", value = "")
   })
 
-  # Dynamic UI to render plots for each subpopulation
+  # Dynamic UI to render plots and summaries for each subpopulation
   output$parallel_results_ui <- renderUI({
     results <- parallel_results_rv()
     if (length(results) == 0) {
@@ -248,6 +248,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         tagList(
           h4(result$label),
           plotOutput(paste0("parallel_plot_", i)),
+          # Add the summary output directly below the plot for this subpopulation
+          verbatimTextOutput(paste0("parallel_summary_", i)),
           hr()
         )
       } else {
@@ -258,35 +260,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     do.call(tagList, result_elements)
   })
 
-  # Combined summary output
-  output$combined_summary <- renderPrint({
-    results <- parallel_results_rv()
-    if (is.null(results) || length(results) == 0) {
-      return("No parallel analysis results to display.")
-    }
-
-    cat("--- Combined RefineR Summary ---\n\n")
-
-    for (i in seq_along(results)) {
-      result <- results[[i]]
-      
-      cat("--------------------------------------------------\n")
-      cat("Summary for ", result$label, "\n")
-      cat("--------------------------------------------------\n")
-      
-      if (result$status == "error") {
-        cat("Status: Error\n")
-        cat("Message: ", result$message, "\n\n")
-        next
-      }
-
-      model <- result$model
-      print(model)
-      cat("\n")
-    }
-  })
-
-  # Dynamic rendering of plots in the main session
+  # Dynamic rendering of plots and summaries in the main session
   observe({
     results <- parallel_results_rv()
     if (length(results) > 0) {
@@ -294,6 +268,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         result <- results[[i]]
         if (result$status == "success") {
           output_id_plot <- paste0("parallel_plot_", i)
+          output_id_summary <- paste0("parallel_summary_", i)
           model <- result$model
           
           # Create plot reactively in the main session
@@ -312,6 +287,13 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
             plot(model, showCI = TRUE, RIperc = c(0.025, 0.975), showPathol = FALSE,
                  title = plot_title,
                  xlab = xlab_text)
+          })
+
+          # Create summary reactively in the main session
+          output[[output_id_summary]] <- renderPrint({
+              req(model)
+              cat("--- RefineR Summary for ", result$label, " ---\n")
+              print(model)
           })
         }
       })
