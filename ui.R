@@ -143,12 +143,17 @@ Before running the GMM, the data is preprocessed: the selected value's column is
                      choices = c("BoxCox" = "BoxCox", "modBoxCox" = "modBoxCox"),
                      selected = "BoxCox", inline = TRUE),
         hr(),
+        radioButtons(inputId = "parallel_nbootstrap_speed", label = "Select Computation Speed:", choices = c("Fast", "Medium", "Slow"), selected = "Fast", inline = TRUE),
+        numericInput("cores", "Number of Cores:", value = 2, min = 1),
+        textInput(inputId = "parallel_unit_input", label = "Unit of Measurement", value = "", placeholder = "ex. g/L"),
+        hr(),
         actionButton("run_parallel_btn", "Run Parallel Analysis", class = "btn-primary"),
         actionButton("reset_parallel_btn", "Reset", class = "btn-secondary"),
         uiOutput("parallel_message")
       ),
       mainPanel(
-        uiOutput("parallel_results_ui")
+        uiOutput("parallel_results_ui"),
+        verbatimTextOutput("combined_summary")
       )
     )
   ),
