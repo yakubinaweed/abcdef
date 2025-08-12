@@ -156,8 +156,16 @@ Before running the GMM, the data is preprocessed: the selected value's column is
         uiOutput("parallel_message")
       ),
       mainPanel(
-        uiOutput("parallel_results_ui"),
-        verbatimTextOutput("combined_summary")
+        # New tabsetPanel for organizing parallel results
+        tabsetPanel(
+          tabPanel("Individual Results", 
+                   uiOutput("parallel_results_ui")
+          ),
+          tabPanel("Combined Summary",
+                   plotOutput("combined_plot"),
+                   verbatimTextOutput("combined_summary")
+          )
+        )
       )
     )
   ),
