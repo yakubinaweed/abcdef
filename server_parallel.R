@@ -39,26 +39,33 @@ filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_a
   filtered_data <- data %>%
     filter(!!rlang::sym(col_age) >= age_min & !!rlang::sym(col_age) <= age_max)
 
-  if (col_gender != "" && col_gender %in% names(data)) {
+  if (col_gender != "" && col_gender %in% names(data) && gender_choice != "Combined") {
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = case_when(
         grepl("male|m|man|jongen(s)?|heren|mannelijk(e)?", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Male",
         grepl("female|f|vrouw(en)?|v|meisje(s)?|dame|mevr|vrouwelijke", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Female",
         TRUE ~ "Other"
-      ))
-
-    if (gender_choice != "Both") {
+      )) %>%
+      filter(Gender_Standardized == gender_choice)
+  } else if (gender_choice == "Combined") {
+    # If a gender column is selected and the choice is 'Combined', standardize the gender column but do not filter by it.
+    if (col_gender != "" && col_gender %in% names(data)) {
       filtered_data <- filtered_data %>%
-        filter(Gender_Standardized == case_when(
-          gender_choice == "M" ~ "Male",
-          gender_choice == "F" ~ "Female"
+        mutate(Gender_Standardized = case_when(
+          grepl("male|m|man|jongen(s)?|heren|mannelijk(e)?", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Male",
+          grepl("female|f|vrouw(en)?|v|meisje(s)?|dame|mevr|vrouwelijke", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Female",
+          TRUE ~ "Other"
         ))
+    } else {
+      # If no gender column is selected, create a dummy 'Combined' gender column
+      filtered_data <- filtered_data %>%
+        mutate(Gender_Standardized = "Combined")
     }
   } else {
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = "Combined")
   }
-
+  
   return(filtered_data)
 }
 
@@ -92,7 +99,7 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
 
   tryCatch({
     filtered_data <- filter_data(data,
-                                 gender_choice = ifelse(gender == "Both", "Both", substr(gender, 1, 1)),
+                                 gender_choice = gender,
                                  age_min = age_min,
                                  age_max = age_max,
                                  col_gender = col_gender,
@@ -166,7 +173,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     
     subpopulations <- c(
       parse_age_ranges(input$male_age_ranges, "Male"),
-      parse_age_ranges(input$female_age_ranges, "Female")
+      parse_age_ranges(input$female_age_ranges, "Female"),
+      parse_age_ranges(input$combined_age_ranges, "Combined")
     )
 
     if (length(subpopulations) == 0) {
@@ -233,6 +241,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     updateRadioButtons(session, "parallel_model_choice", selected = "BoxCox")
     updateTextAreaInput(session, "male_age_ranges", value = "")
     updateTextAreaInput(session, "female_age_ranges", value = "")
+    updateTextAreaInput(session, "combined_age_ranges", value = "")
   })
 
   # Dynamic UI to render plots and summaries for each subpopulation
@@ -275,7 +284,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
           output_id_plot <- paste0("parallel_plot_", i)
           output_id_summary <- paste0("parallel_summary_", i)
           model <- result$model
-
+          
           # Split the label to get gender and age range parts
           label_parts <- unlist(strsplit(result$label, " "))
           gender_part <- label_parts[1]
