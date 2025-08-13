@@ -131,17 +131,31 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
     if (is.null(model) || inherits(model, "try-error")) {
       stop(paste("RefineR model could not be generated for subpopulation:", label))
     }
+    
+    # Get the reference interval values.
+    # The `fullDataEst` is used for the point estimate to align with the plot,
+    # and the `medianBS` is used to get the more robust confidence intervals.
+    ri_data_fulldata <- getRI(model, RIperc = c(0.025, 0.975), pointEst = "fullDataEst")
+    ri_data_median <- getRI(model, RIperc = c(0.025, 0.975), pointEst = "medianBS")
 
-    # NEW: Use getRI() to reliably extract the RI values
-    ri_data <- getRI(model)
-    ri_low <- ri_data$PointEst[ri_data$Percentile == 0.025]
-    ri_high <- ri_data$PointEst[ri_data$Percentile == 0.975]
+    ri_low_fulldata <- ri_data_fulldata$PointEst[ri_data_fulldata$Percentile == 0.025]
+    ri_high_fulldata <- ri_data_fulldata$PointEst[ri_data_fulldata$Percentile == 0.975]
+    
+    ci_low_low <- ri_data_median$CILow[ri_data_median$Percentile == 0.025]
+    ci_low_high <- ri_data_median$CIHigh[ri_data_median$Percentile == 0.025]
+    ci_high_low <- ri_data_median$CILow[ri_data_median$Percentile == 0.975]
+    ci_high_high <- ri_data_median$CIHigh[ri_data_median$Percentile == 0.975]
+
 
     list(
       label = label,
       model = model, # Keep full model for individual summary/plot
-      ri_low = ri_low, # Add simplified RI values
-      ri_high = ri_high, # Add simplified RI values
+      ri_low_fulldata = ri_low_fulldata,
+      ri_high_fulldata = ri_high_fulldata,
+      ci_low_low = ci_low_low,
+      ci_low_high = ci_low_high,
+      ci_high_low = ci_high_low,
+      ci_high_high = ci_high_high,
       status = "success",
       message = "Analysis complete."
     )
@@ -277,18 +291,15 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
 
     for (result in results) {
       if (result$status == "success") {
-        model <- result$model
-        
-        # Use getRI() to get the RI values and extract the point estimates
-        ri_data <- getRI(model)
-        ri_low_value <- ri_data$PointEst[ri_data$Percentile == 0.025]
-        ri_high_value <- ri_data$PointEst[ri_data$Percentile == 0.975]
-        
         # Create a new row for this subpopulation
         new_row <- tibble(
           Subpopulation = result$label,
-          `RI Lower Limit` = round(ri_low_value, 3),
-          `RI Upper Limit` = round(ri_high_value, 3),
+          `RI Lower Limit` = round(result$ri_low_fulldata, 3),
+          `CI Lower Limit (LowerCI)` = round(result$ci_low_low, 3),
+          `CI Lower Limit (UpperCI)` = round(result$ci_low_high, 3),
+          `RI Upper Limit` = round(result$ri_high_fulldata, 3),
+          `CI Upper Limit (LowerCI)` = round(result$ci_high_low, 3),
+          `CI Upper Limit (UpperCI)` = round(result$ci_high_high, 3),
           Model = input$parallel_model_choice,
           Bootstraps = input$parallel_nbootstrap_speed
         )
@@ -409,17 +420,24 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
 
     has_successful_results <- FALSE
     for (r in results) {
-      # NEW: Use the getRI() function to retrieve the values
       if (r$status == "success") {
         has_successful_results <- TRUE
-        ri_data <- getRI(r$model)
         
-        ri_low <- ri_data$PointEst[ri_data$Percentile == 0.025]
-        ri_high <- ri_data$PointEst[ri_data$Percentile == 0.975]
+        # Use full data estimate for consistency with the plot
+        ri_low <- r$ri_low_fulldata
+        ri_high <- r$ri_high_fulldata
+        
+        # Get the medianBS values for the CI summary
+        ci_low_low <- r$ci_low_low
+        ci_low_high <- r$ci_low_high
+        ci_high_low <- r$ci_high_low
+        ci_high_high <- r$ci_high_high
         
         cat(paste0("Subpopulation: ", r$label, "\n"))
         cat(paste0("  Estimated RI Lower Limit: ", round(ri_low, 3), "\n"))
+        cat(paste0("  Confidence Interval for Lower Limit: [", round(ci_low_low, 3), ", ", round(ci_low_high, 3), "]\n"))
         cat(paste0("  Estimated RI Upper Limit: ", round(ri_high, 3), "\n"))
+        cat(paste0("  Confidence Interval for Upper Limit: [", round(ci_high_low, 3), ", ", round(ci_high_high, 3), "]\n"))
         cat(paste0("  Transformation Model: ", input$parallel_model_choice, "\n"))
         if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
           cat(paste0("  Unit of Measurement: ", input$parallel_unit_input, "\n"))
@@ -480,6 +498,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
           output[[output_id_summary]] <- renderPrint({
               req(model)
               cat("--- RefineR Summary for ", input$parallel_col_value, " (Gender: ", gender_part, ", Age: ", age_range_part, ") ---\n")
+              # Print the model summary, which uses the default `fullDataEst` point estimate
               print(model)
           })
         }
