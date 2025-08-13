@@ -132,9 +132,10 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
       stop(paste("RefineR model could not be generated for subpopulation:", label))
     }
 
-    # Extract RI values directly and ensure they are numeric for the combined plot
-    ri_low <- if (!is.null(model$RI) && "RI_low" %in% names(model$RI)) as.numeric(model$RI$RI_low) else NA_real_
-    ri_high <- if (!is.null(model$RI) && "RI_high" %in% names(model$RI)) as.numeric(model$RI$RI_high) else NA_real_
+    # NEW: Use getRI() to reliably extract the RI values
+    ri_data <- getRI(model)
+    ri_low <- ri_data$PointEst[ri_data$Percentile == 0.025]
+    ri_high <- ri_data$PointEst[ri_data$Percentile == 0.975]
 
     list(
       label = label,
@@ -263,66 +264,109 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     updateTextAreaInput(session, "female_age_ranges", value = "")
     updateTextAreaInput(session, "combined_age_ranges", value = "")
   })
-
-  # Dynamic UI to render plots and summaries for each subpopulation
-  output$parallel_results_ui <- renderUI({
+  
+  # Reactive expression to create a single combined table
+  combined_summary_table <- reactive({
     results <- parallel_results_rv()
-    if (length(results) == 0) {
+    if (is.null(results) || length(results) == 0) {
       return(NULL)
     }
 
-    result_elements <- lapply(seq_along(results), function(i) {
-      result <- results[[i]]
+    # Initialize an empty list to store rows
+    table_rows <- list()
+
+    for (result in results) {
       if (result$status == "success") {
-        # Split the label to get gender and age range parts
-        label_parts <- unlist(strsplit(result$label, " "))
-        gender_part <- label_parts[1]
-        age_range_part <- gsub("[()]", "", label_parts[2])
-
-        tagList(
-          h4(paste0(input$parallel_col_value, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")),
-          plotOutput(paste0("parallel_plot_", i)),
-          # Add the summary output directly below the plot for this subpopulation
-          verbatimTextOutput(paste0("parallel_summary_", i)),
-          hr()
+        model <- result$model
+        
+        # Use getRI() to get the RI values and extract the point estimates
+        ri_data <- getRI(model)
+        ri_low_value <- ri_data$PointEst[ri_data$Percentile == 0.025]
+        ri_high_value <- ri_data$PointEst[ri_data$Percentile == 0.975]
+        
+        # Create a new row for this subpopulation
+        new_row <- tibble(
+          Subpopulation = result$label,
+          `RI Lower Limit` = round(ri_low_value, 3),
+          `RI Upper Limit` = round(ri_high_value, 3),
+          Model = input$parallel_model_choice,
+          Bootstraps = input$parallel_nbootstrap_speed
         )
-      } else {
-        div(class = "alert alert-danger", result$message)
+        
+        # Add the new row to our list of rows
+        table_rows[[length(table_rows) + 1]] <- new_row
       }
-    })
+    }
 
-    do.call(tagList, result_elements)
+    # Combine all rows into a single tibble
+    if (length(table_rows) > 0) {
+      bind_rows(table_rows)
+    } else {
+      NULL
+    }
   })
 
-  # Renders the new combined plot
-  output$combined_plot <- renderPlot({
+  # Dynamic UI to render the single combined table, followed by individual plots and summaries
+  output$parallel_results_ui <- renderUI({
     results <- parallel_results_rv()
-
-    if (is.null(results) || length(results) == 0) {
-      return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No parallel analysis results to display.", size = 6, color = "grey50"))
-    }
     
-    # Extract reference intervals from all successful models
-    plot_data <- tibble()
-    for (r in results) {
-      # The 'ri_low' and 'ri_high' components are now directly available if the analysis was successful
-      if (r$status == "success" && !is.na(r$ri_low) && !is.na(r$ri_high) && is.finite(r$ri_low) && is.finite(r$ri_high)) {
-        label_parts <- unlist(strsplit(r$label, " "))
-        gender_part <- label_parts[1]
-        age_range_part <- gsub("[()]", "", label_parts[2])
-        
-        plot_data <- bind_rows(plot_data, tibble(
-          label = paste0(gender_part, " (", age_range_part, ")"),
-          low = r$ri_low,
-          high = r$ri_high,
-          gender = gender_part
-        ))
-      }
+    # Render the combined table first, if it exists
+    combined_table_data <- combined_summary_table()
+    
+    ui_elements <- tagList()
+    
+    if (!is.null(combined_table_data)) {
+      ui_elements <- tagList(
+        ui_elements,
+        h4("Combined Summary of Reference Intervals"),
+        renderTable(combined_table_data),
+        hr() # Add a horizontal line to separate the table from the plots
+      )
     }
 
-    if (nrow(plot_data) == 0) {
+    if (length(results) > 0) {
+      # Then, render the individual plots and summaries
+      individual_elements <- lapply(seq_along(results), function(i) {
+        result <- results[[i]]
+        if (result$status == "success") {
+          # Split the label to get gender and age range parts
+          label_parts <- unlist(strsplit(result$label, " "))
+          gender_part <- label_parts[1]
+          age_range_part <- gsub("[()]", "", label_parts[2])
+
+          tagList(
+            h4(paste0(input$parallel_col_value, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")),
+            plotOutput(paste0("parallel_plot_", i)),
+            # Add the summary output directly below the plot for this subpopulation
+            verbatimTextOutput(paste0("parallel_summary_", i)),
+            hr()
+          )
+        } else {
+          div(class = "alert alert-danger", result$message)
+        }
+      })
+      ui_elements <- tagList(ui_elements, do.call(tagList, individual_elements))
+    }
+
+    if (length(ui_elements) > 0) {
+      ui_elements
+    } else {
+      NULL
+    }
+  })
+
+  # Renders the new combined plot on the "Combined Summary" tab
+  output$combined_plot <- renderPlot({
+    # Use the reactive combined_summary_table for plotting
+    plot_data <- combined_summary_table()
+    
+    if (is.null(plot_data) || nrow(plot_data) == 0) {
       return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No successful reference intervals to plot.", size = 6, color = "grey50"))
     }
+    
+    # Extract gender from the Subpopulation column for coloring
+    plot_data <- plot_data %>%
+      mutate(gender = str_extract(Subpopulation, "^\\w+"))
     
     # Ensure unit_input is not NULL or empty
     unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
@@ -331,16 +375,15 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
       "Value"
     }
 
-    # Create the combined plot
-    ggplot2::ggplot(plot_data, ggplot2::aes(x = reorder(label, desc(label)), ymin = low, ymax = high, color = gender)) +
+    # Create the dumbbell plot
+    ggplot2::ggplot(plot_data, ggplot2::aes(x = reorder(Subpopulation, desc(Subpopulation)), ymin = `RI Lower Limit`, ymax = `RI Upper Limit`, color = gender)) +
       ggplot2::geom_errorbar(width = 0.2, linewidth = 1.2) +
-      ggplot2::geom_point(ggplot2::aes(y = low), size = 3) +
-      ggplot2::geom_point(ggplot2::aes(y = high), size = 3) +
-      ggplot2::coord_flip() +
+      ggplot2::geom_point(ggplot2::aes(y = `RI Lower Limit`), size = 3) +
+      ggplot2::geom_point(ggplot2::aes(y = `RI Upper Limit`), size = 3) +
       ggplot2::labs(
         title = "Combined Reference Intervals for All Subpopulations",
         x = "Subpopulation",
-        y = unit_label, # Use the dynamic unit label
+        y = unit_label,
         color = "Gender"
       ) +
       ggplot2::theme_minimal() +
@@ -349,7 +392,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         axis.title = ggplot2::element_text(size = 14),
         axis.text = ggplot2::element_text(size = 12),
         legend.title = ggplot2::element_text(size = 12, face = "bold"),
-        legend.text = ggplot2::element_text(size = 10)
+        legend.text = ggplot2::element_text(size = 10),
+        axis.text.x = element_text(angle = 45, hjust = 1) # Add this line to rotate x-axis labels
       )
   })
 
@@ -360,17 +404,22 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
       cat("No parallel analysis results to summarize yet.")
       return(NULL)
     }
-
-    cat("--- Combined Summary of Reference Intervals ---\n\n")
     
+    cat("--- Combined Summary of Reference Intervals ---\n\n")
+
     has_successful_results <- FALSE
     for (r in results) {
-      # Use the directly extracted ri_low and ri_high for consistency
-      if (r$status == "success" && !is.na(r$ri_low) && !is.na(r$ri_high)) {
+      # NEW: Use the getRI() function to retrieve the values
+      if (r$status == "success") {
         has_successful_results <- TRUE
+        ri_data <- getRI(r$model)
+        
+        ri_low <- ri_data$PointEst[ri_data$Percentile == 0.025]
+        ri_high <- ri_data$PointEst[ri_data$Percentile == 0.975]
+        
         cat(paste0("Subpopulation: ", r$label, "\n"))
-        cat(paste0("  Estimated RI Lower Limit: ", round(r$ri_low, 3), "\n"))
-        cat(paste0("  Estimated RI Upper Limit: ", round(r$ri_high, 3), "\n"))
+        cat(paste0("  Estimated RI Lower Limit: ", round(ri_low, 3), "\n"))
+        cat(paste0("  Estimated RI Upper Limit: ", round(ri_high, 3), "\n"))
         cat(paste0("  Transformation Model: ", input$parallel_model_choice, "\n"))
         if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
           cat(paste0("  Unit of Measurement: ", input$parallel_unit_input, "\n"))
