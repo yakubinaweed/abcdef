@@ -169,7 +169,26 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
     }
     
     # Use the filter_data function with a conditional check for the gender column
-    filter_data(data_reactive(), input$gender_choice, input$age_range[1], input$age_range[2], input$col_gender, input$col_age)
+    filtered_data <- filter_data(data_reactive(), input$gender_choice, input$age_range[1], input$age_range[2], input$col_gender, input$col_age)
+
+    # --- NEW: Data Cleaning Steps ---
+    # Retrieve the name of the value column to be cleaned
+    value_col_name <- input$col_value
+    
+    # Check if the column exists in the filtered data before proceeding
+    if (!value_col_name %in% names(filtered_data)) {
+        message_rv(list(text = "Error: Selected value column not found after filtering.", type = "danger"))
+        return(NULL)
+    }
+
+    # Convert the value column to numeric, coercing non-numeric values to NA
+    cleaned_data <- filtered_data %>%
+      mutate(!!rlang::sym(value_col_name) := as.numeric(!!rlang::sym(value_col_name))) %>%
+      # Remove any rows where the value column is now NA (either originally empty or non-numeric text)
+      filter(!is.na(!!rlang::sym(value_col_name)))
+      
+    # Return the cleaned data frame
+    return(cleaned_data)
   })
 
   # Observer for the Analyze button

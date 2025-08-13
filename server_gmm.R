@@ -250,12 +250,6 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
       message_rv(list(text = paste0("Error: The selected gender column '", input$gmm_gender_col, "' was not found in your uploaded data. Please select a valid column."), type = "error"))
       return(NULL)
     }
-    
-    # NEW ERROR HANDLING: Check if selected columns are numeric
-    if (!is.numeric(data_check[[input$gmm_value_col]]) || !is.numeric(data_check[[input$gmm_age_col]])) {
-      message_rv(list(text = paste0("Error: The selected columns for Values (", input$gmm_value_col, ") and/or Age (", input$gmm_age_col, ") must contain numeric data. Please check your file."), type = "error"))
-      return(NULL)
-    }
 
     # NEW ERROR HANDLING: Check if the same column is selected for Value and Age
     if (input$gmm_value_col == input$gmm_age_col) {
@@ -305,16 +299,24 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
         if (gender_col != "") {
           gender_col_sym <- rlang::sym(gender_col)
           gmm_data <- data %>%
-            dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym, Gender_orig = !!gender_col_sym) %>%
-            na.omit()
+            dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym, Gender_orig = !!gender_col_sym)
         } else {
           gmm_data <- data %>%
-            dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym) %>%
-            na.omit()
+            dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym)
         }
+        
+        # --- UPDATED: Data Cleaning Steps ---
+        # Convert Value and Age columns to numeric, coercing non-numeric values to NA
+        gmm_data <- gmm_data %>%
+          mutate(
+            Value = as.numeric(as.character(Value)),
+            Age = as.numeric(as.character(Age))
+          ) %>%
+          # Remove any rows where either the Value or Age column is NA
+          na.omit()
   
         if (nrow(gmm_data) == 0) {
-          message_rv(list(text = "No complete rows for GMM after NA removal. Check data or selections.", type = "error"))
+          message_rv(list(text = "No complete rows for GMM after data cleaning and NA removal. Check your data or selections.", type = "error"))
           return(NULL)
         }
   
