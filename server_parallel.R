@@ -112,19 +112,29 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
     # If subpopulation gender is "Male", filter_data expects "M". If "Female", expects "F". If "Combined", expects "Both".
     filter_gender_choice <- ifelse(gender == "Male", "M", ifelse(gender == "Female", "F", "Both"))
 
-    filtered_data <- filter_data(data,
+    filtered_data_for_refiner <- filter_data(data,
                                  gender_choice = filter_gender_choice, # Use the derived gender_choice
                                  age_min = age_min,
                                  age_max = age_max,
                                  col_gender = col_gender,
                                  col_age = col_age)
 
-    if (nrow(filtered_data) == 0) {
+    # Store the unfiltered (but age/gender-selected) data in the result for plotting
+    raw_subpopulation_data <- filter_data(data,
+                                          gender_choice = filter_gender_choice,
+                                          age_min = age_min,
+                                          age_max = age_max,
+                                          col_gender = col_gender,
+                                          col_age = col_age) %>%
+                                    rename(Age = !!rlang::sym(col_age), Value = !!rlang::sym(col_value)) %>%
+                                    mutate(label = label) # Add the label column here
+    
+    if (nrow(filtered_data_for_refiner) == 0) {
       stop(paste("No data found for subpopulation:", label, "after filtering."))
     }
     
     # Run the refineR model
-    model <- refineR::findRI(Data = filtered_data[[col_value]],
+    model <- refineR::findRI(Data = filtered_data_for_refiner[[col_value]],
                              NBootstrap = nbootstrap_value,
                              model = model_choice)
 
@@ -150,6 +160,9 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
     list(
       label = label,
       model = model, # Keep full model for individual summary/plot
+      raw_data = raw_subpopulation_data, # Store the raw data for density plots
+      age_min = age_min,
+      age_max = age_max,
       ri_low_fulldata = ri_low_fulldata,
       ri_high_fulldata = ri_high_fulldata,
       ci_low_low = ci_low_low,
@@ -171,7 +184,10 @@ run_single_refiner_analysis <- function(subpopulation, data, col_value, col_age,
 
 # Main server logic for the parallel tab
 parallelServer <- function(input, output, session, parallel_data_rv, parallel_results_rv, parallel_message_rv, analysis_running_rv) {
-
+  
+  # Reactive value to store all raw data from successful analyses for plotting
+  combined_raw_data_rv <- reactiveVal(tibble())
+  
   # Observer for file upload
   observeEvent(input$parallel_file, {
     req(input$parallel_file)
@@ -248,7 +264,20 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
       )
     }, future.seed = TRUE)
 
+    # Update reactive values with results
     parallel_results_rv(results_list)
+
+    # Gather all raw data from successful analyses for plotting
+    raw_data_list <- lapply(results_list, function(r) {
+      if (r$status == "success") {
+        return(r$raw_data)
+      } else {
+        return(NULL)
+      }
+    })
+    
+    # Combine all data into a single tibble, ignoring NULLs
+    combined_raw_data_rv(bind_rows(raw_data_list))
 
     # Finalize analysis
     analysis_running_rv(FALSE)
@@ -268,6 +297,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
   observeEvent(input$reset_parallel_btn, {
     parallel_data_rv(NULL)
     parallel_results_rv(list())
+    combined_raw_data_rv(tibble()) # Reset the raw data reactive value
     parallel_message_rv(list(type = "", text = ""))
     shinyjs::reset("parallel_file")
     updateSelectInput(session, "parallel_col_value", choices = c("None" = ""), selected = "")
@@ -294,6 +324,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         # Create a new row for this subpopulation
         new_row <- tibble(
           Subpopulation = result$label,
+          age_min = result$age_min,
+          age_max = result$age_max,
           `RI Lower Limit` = round(result$ri_low_fulldata, 3),
           `CI Lower Limit (LowerCI)` = round(result$ci_low_low, 3),
           `CI Lower Limit (UpperCI)` = round(result$ci_low_high, 3),
@@ -366,37 +398,190 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
     }
   })
 
-  # Renders the new combined plot on the "Combined Summary" tab
-  output$combined_plot <- renderPlot({
-    # Use the reactive combined_summary_table for plotting
+  # UPDATED: Render the enhanced dumbbell plot with confidence intervals
+  output$combined_dumbbell_plot <- renderPlot({
     plot_data <- combined_summary_table()
     
     if (is.null(plot_data) || nrow(plot_data) == 0) {
       return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No successful reference intervals to plot.", size = 6, color = "grey50"))
     }
     
-    # Extract gender from the Subpopulation column for coloring
-    plot_data <- plot_data %>%
-      mutate(gender = str_extract(Subpopulation, "^\\w+"))
-    
-    # Ensure unit_input is not NULL or empty
     unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
       paste0("Value [", input$parallel_unit_input, "]")
     } else {
       "Value"
     }
 
-    # Create the dumbbell plot
-    ggplot2::ggplot(plot_data, ggplot2::aes(x = reorder(Subpopulation, desc(Subpopulation)), ymin = `RI Lower Limit`, ymax = `RI Upper Limit`, color = gender)) +
-      ggplot2::geom_errorbar(width = 0.2, linewidth = 1.2) +
-      ggplot2::geom_point(ggplot2::aes(y = `RI Lower Limit`), size = 3) +
-      ggplot2::geom_point(ggplot2::aes(y = `RI Upper Limit`), size = 3) +
+    plot_data <- plot_data %>%
+      mutate(gender = str_extract(Subpopulation, "^\\w+"))
+    
+    ggplot2::ggplot(plot_data, ggplot2::aes(x = Subpopulation, y = `RI Lower Limit`)) +
+      # Add the main RI line, colored by gender
+      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `RI Lower Limit`, yend = `RI Upper Limit`, color = gender),
+                            linewidth = 1.5) +
+      # Add the point estimate markers for RI limits
+      ggplot2::geom_point(ggplot2::aes(y = `RI Lower Limit`), color = "black", size = 3, shape = 1) +
+      ggplot2::geom_point(ggplot2::aes(y = `RI Upper Limit`), color = "black", size = 3, shape = 1) +
+      # Add a thick, transparent line for the confidence intervals, with a custom legend label
+      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `CI Lower Limit (LowerCI)`, yend = `CI Lower Limit (UpperCI)`,
+                                          color = gender, linetype = "CI Lower Limit"),
+                            linewidth = 1.5, alpha = 0.5) +
+      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `CI Upper Limit (LowerCI)`, yend = `CI Upper Limit (UpperCI)`,
+                                          color = gender, linetype = "CI Upper Limit"),
+                            linewidth = 1.5, alpha = 0.5) +
       ggplot2::labs(
-        title = "Combined Reference Intervals for All Subpopulations",
+        title = "Combined Reference Intervals with Confidence Intervals",
         x = "Subpopulation",
         y = unit_label,
-        color = "Gender"
+        color = "Gender",
+        linetype = "Confidence Interval"
       ) +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal() +
+      ggplot2::scale_color_manual(values = c("Female" = "darkred", "Male" = "steelblue", "Combined" = "darkgreen")) +
+      ggplot2::scale_linetype_manual(name = "Intervals",
+                                      values = c("CI Lower Limit" = "solid", "CI Upper Limit" = "solid"),
+                                      labels = c("95% CI for RI limits")) +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(size = 18, face = "bold", hjust = 0.5),
+        axis.title = ggplot2::element_text(size = 14),
+        axis.text = ggplot2::element_text(size = 12),
+        legend.title = ggplot2::element_text(size = 12, face = "bold"),
+        legend.text = ggplot2::element_text(size = 10),
+        legend.position = "bottom"
+      )
+  })
+
+  # UPDATED: Render the faceted density plot
+  output$combined_density_plot <- renderPlot({
+    plot_data <- combined_raw_data_rv()
+    results <- parallel_results_rv()
+    
+    if (is.null(plot_data) || nrow(plot_data) == 0) {
+      return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No data available for plotting.", size = 6, color = "grey50"))
+    }
+    
+    # Ensure there are at least two subpopulations to facet by
+    if (length(unique(plot_data$Gender_Standardized)) < 1 || length(unique(plot_data$label)) < 1) {
+       return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "Insufficient data to create a faceted plot.", size = 6, color = "grey50"))
+    }
+
+    unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
+      paste0("Value [", input$parallel_unit_input, "]")
+    } else {
+      "Value"
+    }
+    
+    # Prepare data for RI lines
+    ri_lines <- tibble()
+    for (result in results) {
+      if (result$status == "success") {
+        ri_lines <- bind_rows(ri_lines, tibble(
+          label = result$label,
+          ri_low = result$ri_low_fulldata,
+          ri_high = result$ri_high_fulldata
+        ))
+      }
+    }
+
+    # The raw data has a `Gender_Standardized` column, but `label` is the combined gender + age
+    ggplot2::ggplot(plot_data, ggplot2::aes(x = Value, fill = Gender_Standardized)) +
+      ggplot2::geom_density(alpha = 0.6) +
+      ggplot2::geom_vline(data = ri_lines, ggplot2::aes(xintercept = ri_low), linetype = "dashed", color = "darkred", size = 1) +
+      ggplot2::geom_vline(data = ri_lines, ggplot2::aes(xintercept = ri_high), linetype = "dashed", color = "darkred", size = 1) +
+      ggplot2::facet_wrap(~label, scales = "free_y") +
+      ggplot2::labs(title = "Value Distribution by Subpopulation",
+                    x = unit_label,
+                    y = "Density",
+                    fill = "Gender") +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(size = 18, face = "bold", hjust = 0.5),
+        strip.text = ggplot2::element_text(size = 12),
+        axis.title = ggplot2::element_text(size = 14),
+        axis.text = ggplot2::element_text(size = 12),
+        legend.title = ggplot2::element_text(size = 12, face = "bold"),
+        legend.text = ggplot2::element_text(size = 10)
+      )
+  })
+
+  # UPDATED: Render the grouped box plot
+  output$combined_box_plot <- renderPlot({
+    plot_data <- combined_raw_data_rv()
+    
+    if (is.null(plot_data) || nrow(plot_data) == 0) {
+      return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No data available for plotting.", size = 6, color = "grey50"))
+    }
+    
+    unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
+      paste0("Value [", input$parallel_unit_input, "]")
+    } else {
+      "Value"
+    }
+
+    ggplot2::ggplot(plot_data, ggplot2::aes(x = reorder(label, Value, FUN = median), y = Value, fill = Gender_Standardized)) +
+      ggplot2::geom_boxplot(alpha = 0.7, outlier.colour = "red", outlier.shape = 8) +
+      ggplot2::labs(
+        title = "Summary of Value Distribution by Subpopulation",
+        x = "Subpopulation",
+        y = unit_label,
+        fill = "Gender"
+      ) +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal() +
+      ggplot2::theme(
+        plot.title = ggplot2::element_text(size = 18, face = "bold", hjust = 0.5),
+        axis.title = ggplot2::element_text(size = 14),
+        axis.text = ggplot2::element_text(size = 12),
+        legend.title = ggplot2::element_text(size = 12, face = "bold"),
+        legend.text = ggplot2::element_text(size = 10)
+      )
+  })
+
+  # UPDATED: Render the age-stratified reference interval plot
+  output$combined_ri_plot <- renderPlot({
+    plot_data <- combined_summary_table()
+    
+    if (is.null(plot_data) || nrow(plot_data) == 0) {
+      return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No successful reference intervals to plot.", size = 6, color = "grey50"))
+    }
+    
+    unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
+      paste0("Value [", input$parallel_unit_input, "]")
+    } else {
+      "Value"
+    }
+
+    plot_data <- plot_data %>%
+      mutate(gender = str_extract(Subpopulation, "^\\w+"))
+    
+    gender_colors <- c("Male" = "steelblue", "Female" = "darkred", "Combined" = "darkgreen")
+
+    ggplot2::ggplot(plot_data) +
+      # Add shaded ribbon for the Confidence Interval
+      ggplot2::geom_ribbon(ggplot2::aes(x = age_min, xmax = age_max, ymin = `CI Lower Limit (LowerCI)`, ymax = `CI Upper Limit (UpperCI)`, fill = gender),
+                           alpha = 0.2) +
+      # Add horizontal line for the Reference Interval (lower limit)
+      ggplot2::geom_segment(ggplot2::aes(x = age_min, xend = age_max, y = `RI Lower Limit`, yend = `RI Lower Limit`, color = gender),
+                            linewidth = 1.2, linetype = "solid") +
+      # Add horizontal line for the Reference Interval (upper limit)
+      ggplot2::geom_segment(ggplot2::aes(x = age_min, xend = age_max, y = `RI Upper Limit`, yend = `RI Upper Limit`, color = gender),
+                            linewidth = 1.2, linetype = "solid") +
+      # Add a point at the end of each segment to mark the age range
+      ggplot2::geom_point(ggplot2::aes(x = age_min, y = `RI Lower Limit`, color = gender), size = 2) +
+      ggplot2::geom_point(ggplot2::aes(x = age_max, y = `RI Lower Limit`, color = gender), size = 2) +
+      ggplot2::geom_point(ggplot2::aes(x = age_min, y = `RI Upper Limit`, color = gender), size = 2) +
+      ggplot2::geom_point(ggplot2::aes(x = age_max, y = `RI Upper Limit`, color = gender), size = 2) +
+      ggplot2::labs(
+        title = "Age-Stratified Reference Intervals by Subpopulation",
+        x = "Age",
+        y = unit_label,
+        color = "Gender",
+        fill = "Gender (95% CI)"
+      ) +
+      ggplot2::scale_x_continuous(limits = c(0, 120)) +
+      ggplot2::scale_color_manual(values = gender_colors) +
+      ggplot2::scale_fill_manual(values = gender_colors, guide = "none") + # Hide legend for the fill
       ggplot2::theme_minimal() +
       ggplot2::theme(
         plot.title = ggplot2::element_text(size = 18, face = "bold", hjust = 0.5),
@@ -404,10 +589,10 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         axis.text = ggplot2::element_text(size = 12),
         legend.title = ggplot2::element_text(size = 12, face = "bold"),
         legend.text = ggplot2::element_text(size = 10),
-        axis.text.x = element_text(angle = 45, hjust = 1) # Add this line to rotate x-axis labels
+        legend.position = "bottom"
       )
   })
-
+  
   # Renders the combined text summary for all successful subpopulations
   output$combined_summary <- renderPrint({
     results <- parallel_results_rv()
@@ -480,7 +665,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
                                  "BoxCox" = " (BoxCox Transformed)",
                                  "modBoxCox" = " (modBoxCox Transformed)")
             
-            plot_title <- paste0("Estimated Reference Intervals for ", value_col_name, model_type, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")
+            plot_title <- paste0("Estimated Reference Intervals for ", value_col_name, 
+                                 model_type, " (Gender: ", gender_part, ", Age: ", age_range_part, ")")
             
             # Ensure parallel_unit_input is not NULL or empty for xlab_text
             xlab_text <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {

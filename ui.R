@@ -162,7 +162,14 @@ Before running the GMM, the data is preprocessed: the selected value's column is
                    uiOutput("parallel_results_ui")
           ),
           tabPanel("Combined Summary",
-                   plotOutput("combined_plot"),
+                   h3("Reference Intervals with Confidence Intervals"),
+                   plotOutput("combined_dumbbell_plot"),
+                   h3("Age-Stratified Reference Intervals"),
+                   plotOutput("combined_ri_plot"),
+                   h3("Data Distributions (Density Plots)"),
+                   plotOutput("combined_density_plot"),
+                   h3("Summary of Data Distributions (Box Plots)"),
+                   plotOutput("combined_box_plot"),
                    verbatimTextOutput("combined_summary")
           )
         )
