@@ -399,13 +399,14 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
   })
 
   # UPDATED: Render the enhanced dumbbell plot with confidence intervals
-  output$combined_dumbbell_plot <- renderPlot({
+# UPDATED: Render the enhanced dumbbell plot with confidence intervals
+output$combined_dumbbell_plot <- renderPlot({
     plot_data <- combined_summary_table()
-    
+
     if (is.null(plot_data) || nrow(plot_data) == 0) {
       return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No successful reference intervals to plot.", size = 6, color = "grey50"))
     }
-    
+
     unit_label <- if (!is.null(input$parallel_unit_input) && input$parallel_unit_input != "") {
       paste0("Value [", input$parallel_unit_input, "]")
     } else {
@@ -414,34 +415,36 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
 
     plot_data <- plot_data %>%
       mutate(gender = str_extract(Subpopulation, "^\\w+"))
-    
-    ggplot2::ggplot(plot_data, ggplot2::aes(x = Subpopulation, y = `RI Lower Limit`)) +
-      # Add the main RI line, colored by gender
-      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `RI Lower Limit`, yend = `RI Upper Limit`, color = gender),
-                            linewidth = 1.5) +
-      # Add the point estimate markers for RI limits
-      ggplot2::geom_point(ggplot2::aes(y = `RI Lower Limit`), color = "black", size = 3, shape = 1) +
-      ggplot2::geom_point(ggplot2::aes(y = `RI Upper Limit`), color = "black", size = 3, shape = 1) +
-      # Add a thick, transparent line for the confidence intervals, with a custom legend label
-      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `CI Lower Limit (LowerCI)`, yend = `CI Lower Limit (UpperCI)`,
-                                          color = gender, linetype = "CI Lower Limit"),
-                            linewidth = 1.5, alpha = 0.5) +
-      ggplot2::geom_segment(ggplot2::aes(xend = Subpopulation, y = `CI Upper Limit (LowerCI)`, yend = `CI Upper Limit (UpperCI)`,
-                                          color = gender, linetype = "CI Upper Limit"),
-                            linewidth = 1.5, alpha = 0.5) +
+
+    gender_colors <- c("Male" = "steelblue", "Female" = "darkred", "Combined" = "darkgreen")
+
+    ggplot2::ggplot(plot_data, ggplot2::aes(y = Subpopulation)) +
+      # Use geom_rect to create a shaded box for the entire CI range
+      ggplot2::geom_rect(ggplot2::aes(xmin = `CI Lower Limit (LowerCI)`,
+                                      xmax = `CI Upper Limit (UpperCI)`,
+                                      ymin = as.numeric(factor(Subpopulation)) - 0.25,
+                                      ymax = as.numeric(factor(Subpopulation)) + 0.25,
+                                      fill = gender),
+                         alpha = 0.2, show.legend = FALSE) +
+
+      # Add a horizontal line for the Reference Interval (RI) itself
+      ggplot2::geom_segment(ggplot2::aes(x = `RI Lower Limit`, xend = `RI Upper Limit`, y = Subpopulation, yend = Subpopulation, color = gender),
+                            linewidth = 1) +
+
+      # Add points for the RI limits (the start and end of the RI line)
+      ggplot2::geom_point(ggplot2::aes(x = `RI Lower Limit`, color = gender), shape = 18, size = 4) +
+      ggplot2::geom_point(ggplot2::aes(x = `RI Upper Limit`, color = gender), shape = 18, size = 4) +
+
       ggplot2::labs(
         title = "Combined Reference Intervals with Confidence Intervals",
-        x = "Subpopulation",
-        y = unit_label,
+        x = unit_label,
+        y = "Subpopulation",
         color = "Gender",
-        linetype = "Confidence Interval"
+        fill = "Gender (95% CI)"
       ) +
-      ggplot2::coord_flip() +
       ggplot2::theme_minimal() +
-      ggplot2::scale_color_manual(values = c("Female" = "darkred", "Male" = "steelblue", "Combined" = "darkgreen")) +
-      ggplot2::scale_linetype_manual(name = "Intervals",
-                                      values = c("CI Lower Limit" = "solid", "CI Upper Limit" = "solid"),
-                                      labels = c("95% CI for RI limits")) +
+      ggplot2::scale_color_manual(values = gender_colors) +
+      ggplot2::scale_fill_manual(values = gender_colors) +
       ggplot2::theme(
         plot.title = ggplot2::element_text(size = 18, face = "bold", hjust = 0.5),
         axis.title = ggplot2::element_text(size = 14),
