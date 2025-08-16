@@ -363,7 +363,8 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
         ui_elements,
         h4("Combined Summary of Reference Intervals"),
         renderTable(combined_table_data),
-        hr() # Add a horizontal line to separate the table from the plots
+        div(class = "spacing-div"),
+        hr()
       )
     }
 
@@ -382,6 +383,7 @@ parallelServer <- function(input, output, session, parallel_data_rv, parallel_re
             plotOutput(paste0("parallel_plot_", i)),
             # Add the summary output directly below the plot for this subpopulation
             verbatimTextOutput(paste0("parallel_summary_", i)),
+            div(class = "spacing-div"),
             hr()
           )
         } else {
