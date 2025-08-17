@@ -7,25 +7,25 @@
 # =========================================================================
 
 # Function to filter data based on gender and age
-# It takes a data frame, gender choice, age range, and column names for gender and age.
-# It returns a filtered data frame with a standardized 'Gender_Standardized' column.
 filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_age) {
+  # Ensures an age column is specified
   if (col_age == "") {
     stop("Age column not found in data.")
   }
-
+  # Filters the data based on the selected age range
   filtered_data <- data %>%
     filter(!!rlang::sym(col_age) >= age_min & !!rlang::sym(col_age) <= age_max)
 
-  # Check if a gender column is selected
+  # Handles gender filtering if a gender column is selected
   if (col_gender != "" && col_gender %in% names(data)) {
+    # Standardizes gender entries (e.g., "Male", "Female")
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = case_when(
         grepl("male|m|man|jongen(s)?|heren|mannelijk(e)?", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Male",
         grepl("female|f|vrouw(en)?|v|meisje(s)?|dame|mevr|vrouwelijke", !!rlang::sym(col_gender), ignore.case = TRUE) ~ "Female",
         TRUE ~ "Other"
       ))
-
+    # Filters for a specific gender if "Both" is not selected
     if (gender_choice != "Both") {
       filtered_data <- filtered_data %>%
         filter(Gender_Standardized == case_when(
@@ -34,16 +34,14 @@ filter_data <- function(data, gender_choice, age_min, age_max, col_gender, col_a
         ))
     }
   } else {
-    # If no gender column is selected, create a dummy 'Combined' gender column
+    # If no gender column is selected, assigns a dummy 'Combined' gender
     filtered_data <- filtered_data %>%
       mutate(Gender_Standardized = "Combined")
   }
-
   return(filtered_data)
 }
 
 # Function to generate a safe filename for plots
-# It creates a unique filename using a title, datestamp, and timestamp.
 generate_safe_filename <- function(plot_title, base_path, extension = "png") {
   safe_title <- gsub("[^a-zA-Z0-9_-]", "_", plot_title)
   datestamp <- format(Sys.Date(), "%Y%m%d")
@@ -63,7 +61,7 @@ generate_refiner_plot <- function(model, title, xlab, ref_low, ref_high) {
   y_max <- usr[4]
   y_label_pos <- y_max * 0.95
 
-  # Add manual lower limit line and text
+  # Adds manual lower limit line and text
   if (!is.na(ref_low) && is.numeric(ref_low)) {
     abline(v = ref_low, col = "red", lty = 2, lwd = 2)
     text(x = ref_low, y = y_label_pos,
@@ -71,7 +69,7 @@ generate_refiner_plot <- function(model, title, xlab, ref_low, ref_high) {
          col = "red", cex = 1.1, pos = 4)
   }
 
-  # Add manual upper limit line and text
+  # Adds manual upper limit line and text
   if (!is.na(ref_high) && is.numeric(ref_high)) {
     abline(v = ref_high, col = "blue", lty = 2, lwd = 2)
     text(x = ref_high, y = y_label_pos,
@@ -125,18 +123,18 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
 
   # Observer for the Reset button on the Main Analysis tab
   observeEvent(input$reset_btn, {
-    # Reset all inputs and outputs to their initial state
+    # Resets all inputs and outputs to their initial state
     shinyjs::reset("data_file")
     data_reactive(NULL)
-    refiner_model_rv(NULL) # Reset the model
-    plot_title_rv("") # Reset the title
+    refiner_model_rv(NULL) # Resets the model
+    plot_title_rv("") # Resets the title
     message_rv(list(type = "", text = ""))
     
-    # Explicitly reset the select inputs to prevent lingering values
+    # Explicitly resets the select inputs to prevent lingering values
     updateSelectInput(session, "col_value", choices = c("None" = ""), selected = "")
     updateSelectInput(session, "col_age", choices = c("None" = ""), selected = "")
     updateSelectInput(session, "col_gender", choices = c("None" = ""), selected = "")
-    # Reset model choice to default (Box-Cox)
+    # Resets model choice to default (Box-Cox)
     updateRadioButtons(session, "model_choice", selected = "BoxCox")
   })
 
@@ -160,40 +158,37 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
     }
   })
   
-  # Reactive expression for filtered data
-  # This filters the raw data based on user selections (gender and age range)
+  # Reactive expression for filtered and cleaned data
   filtered_data_reactive <- reactive({
+    # Requires data and column selections before proceeding
     req(data_reactive(), input$col_value, input$col_age)
     if (input$col_value == "" || input$col_age == "") {
       return(NULL)
     }
     
-    # Use the filter_data function with a conditional check for the gender column
+    # Filters the raw data based on user selections
     filtered_data <- filter_data(data_reactive(), input$gender_choice, input$age_range[1], input$age_range[2], input$col_gender, input$col_age)
 
-    # --- NEW: Data Cleaning Steps ---
-    # Retrieve the name of the value column to be cleaned
+    # Retrieves the name of the value column to be cleaned
     value_col_name <- input$col_value
     
-    # Check if the column exists in the filtered data before proceeding
+    # Checks if the column exists in the filtered data before proceeding
     if (!value_col_name %in% names(filtered_data)) {
         message_rv(list(text = "Error: Selected value column not found after filtering.", type = "danger"))
         return(NULL)
     }
 
-    # Convert the value column to numeric, coercing non-numeric values to NA
+    # Converts the value column to numeric and removes rows with NA values
     cleaned_data <- filtered_data %>%
       mutate(!!rlang::sym(value_col_name) := as.numeric(!!rlang::sym(value_col_name))) %>%
-      # Remove any rows where the value column is now NA (either originally empty or non-numeric text)
       filter(!is.na(!!rlang::sym(value_col_name)))
       
-    # Return the cleaned data frame
     return(cleaned_data)
   })
 
   # Observer for the Analyze button
-  # This is the core logic for the main analysis, running the refineR model
   observeEvent(input$analyze_btn, {
+    # Prevents multiple analyses from running at once
     if (analysis_running_rv()) {
       message_rv(list(text = "Analysis is already running. Please wait or reset.", type = "warning"))
       return()
@@ -202,19 +197,20 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
     filtered_data <- filtered_data_reactive()
     req(filtered_data)
     
+    # Displays an error if the filtered dataset is empty
     if (nrow(filtered_data) == 0) {
       message_rv(list(text = "Filtered dataset is empty. Please adjust your filtering criteria.", type = "danger"))
       return()
     }
     
-    # Disable button and change text when analysis starts
+    # Disables the button and changes its text during analysis
     shinyjs::disable("analyze_btn")
     shinyjs::runjs("$('#analyze_btn').text('Analyzing...');")
     
     analysis_running_rv(TRUE)
     session$sendCustomMessage('analysisStatus', TRUE)
 
-    # Isolate inputs to prevent re-running the analysis on every change
+    # Isolates inputs to prevent the analysis from re-running on every change
     isolated_inputs <- isolate({
       list(
         gender_choice = input$gender_choice,
@@ -227,7 +223,7 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
         ref_low = input$ref_low,
         ref_high = input$ref_high,
         enable_directory = input$enable_directory,
-        model_choice = input$model_choice # Get the selected model choice
+        model_choice = input$model_choice # Gets the selected model choice
       )
     })
     
@@ -236,20 +232,20 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
     tryCatch({
       nbootstrap_value <- switch(isolated_inputs$nbootstrap_speed, "Fast" = 1, "Medium" = 50, "Slow" = 200, 1)
       
-      # Run the main RefineR function with the selected model
+      # Runs the main RefineR function with the selected model
       refiner_model <- refineR::findRI(Data = filtered_data[[isolated_inputs$col_value]],
                                        NBootstrap = nbootstrap_value,
                                        model = isolated_inputs$model_choice)
       
+      # Stops if the model could not be generated
       if (is.null(refiner_model) || inherits(refiner_model, "try-error")) {
         stop("RefineR model could not be generated. Check your input data and parameters.")
       }
       
       refiner_model_rv(refiner_model)
       
+      # Dynamically generates a plot title
       gender_text <- if (isolated_inputs$col_gender == "") "Combined" else paste0("Gender: ", isolated_inputs$gender_choice)
-      
-      # Adjust plot title to include transformation model
       model_text <- switch(isolated_inputs$model_choice,
                            "BoxCox" = " (BoxCox Transformed)",
                            "modBoxCox" = " (modBoxCox Transformed)")
@@ -259,7 +255,7 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
                            " (", gender_text, 
                            ", Age: ", isolated_inputs$age_range[1], "-", isolated_inputs$age_range[2], ")"))
 
-      # If auto-save is enabled, save the plot to the selected directory
+      # Saves the plot if auto-save is enabled
       if (isolated_inputs$enable_directory && !is.null(selected_dir_reactive())) {
         filename <- generate_safe_filename("RefineR_Plot", selected_dir_reactive(), "png")
         png(filename, width = 800, height = 600)
@@ -277,9 +273,10 @@ mainServer <- function(input, output, session, data_reactive, selected_dir_react
     }, error = function(e) {
       error_message <- paste("Analysis Error:", e$message)
       message_rv(list(text = error_message, type = "danger"))
-      refiner_model_rv(NULL) # Set to NULL to clear plot and summary
+      refiner_model_rv(NULL) # Sets to NULL to clear plot and summary
       print(error_message)
     }, finally = {
+      # Re-enables the button and resets its text after analysis
       analysis_running_rv(FALSE)
       session$sendCustomMessage('analysisStatus', FALSE)
       shinyjs::enable("analyze_btn")

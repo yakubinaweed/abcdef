@@ -7,8 +7,6 @@
 # =========================================================================
 
 # Z-transform a numeric vector (standardization)
-# @param x: A numeric vector.
-# @return: The standardized numeric vector.
 z_transform <- function(x) {
   if (sd(x, na.rm = TRUE) == 0) {
     return(rep(0, length(x)))
@@ -17,15 +15,12 @@ z_transform <- function(x) {
 }
 
 # Function to apply Yeo-Johnson Transformation conditionally
-# It checks the skewness of a data vector and applies the transformation if the absolute skewness is above a threshold.
-# @param data_vector: A numeric vector to transform.
-# @param skewness_threshold: The threshold for applying the transformation.
-# @return: A list containing the transformed data and a boolean indicating if a transformation was applied.
 apply_conditional_yeo_johnson <- function(data_vector, skewness_threshold = 0.5) {
   transformed_data <- data_vector
   transformation_applied <- FALSE
   skew <- moments::skewness(data_vector, na.rm = TRUE)
 
+  # Applies the transformation if the absolute skewness is above a threshold
   if (abs(skew) > skewness_threshold) {
     tryCatch({
       pt_result <- car::powerTransform(data_vector)
@@ -39,14 +34,10 @@ apply_conditional_yeo_johnson <- function(data_vector, skewness_threshold = 0.5)
   } else {
     message(paste("Yeo-Johnson transformation not needed (skewness=", round(skew, 2), ")"))
   }
-
   return(list(transformed_data = transformed_data, transformation_applied = transformation_applied))
 }
 
 # Function to run GMM analysis using mclust, always with BIC.
-# @param data_mat: A numeric matrix or data frame for clustering.
-# @param G_range: A range of component numbers to test (e.g., 2:5).
-# @return: An Mclust object representing the best-fit model.
 run_gmm_with_criterion <- function(data_mat, G_range = 2:5) {
   if (!is.matrix(data_mat) && !is.data.frame(data_mat)) {
     stop("Input data_mat must be a matrix or data frame for GMM analysis.")
@@ -68,10 +59,6 @@ run_gmm_with_criterion <- function(data_mat, G_range = 2:5) {
 }
 
 # Function to assign clusters back to the original data frame
-# It adds a 'cluster' column to the data frame based on the GMM model's classification.
-# @param df: The original data frame.
-# @param gmm_model: The Mclust model object with a 'classification' property.
-# @return: The data frame with an added 'cluster' column.
 assign_clusters <- function(df, gmm_model) {
   if (is.null(gmm_model) || is.null(gmm_model$classification)) {
     warning("GMM model or classification is NULL. Cannot assign clusters.")
@@ -82,11 +69,6 @@ assign_clusters <- function(df, gmm_model) {
 }
 
 # Function to plot age vs a generic value colored by cluster
-# It generates a ggplot scatter plot with confidence ellipses and cluster means.
-# @param df: The data frame with 'Age', 'Value', 'Gender', and 'cluster' columns.
-# @param value_col_name: The name of the value column for dynamic labeling.
-# @param age_col_name: The name of the age column for dynamic labeling.
-# @return: A ggplot object.
 plot_value_age <- function(df, value_col_name, age_col_name) {
   if (is.null(df) || nrow(df) == 0) {
     return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No GMM data available for plotting.", size = 6, color = "grey50"))
@@ -94,32 +76,27 @@ plot_value_age <- function(df, value_col_name, age_col_name) {
 
   plot_title <- paste(value_col_name, "vs", age_col_name, "by Subpopulation Cluster")
   
-  # Calculate cluster means
+  # Calculates cluster means for plotting
   cluster_means <- df %>%
     dplyr::group_by(Gender, cluster) %>%
     dplyr::summarise(mean_Age = mean(Age, na.rm = TRUE),
                      mean_Value = mean(Value, na.rm = TRUE),
                      .groups = 'drop')
 
+  # Creates the ggplot scatter plot
   ggplot2::ggplot(df, ggplot2::aes(x = Age, y = Value, color = factor(cluster))) +
-    # Original design for points
     ggplot2::geom_point(position = ggplot2::position_jitter(width = 0.2, height = 0.2), alpha = 0.6) +
-    # Original design for ellipses
     ggplot2::stat_ellipse(geom = "polygon", ggplot2::aes(fill = factor(cluster)), alpha = 0.2, show.legend = FALSE, level = 0.95) +
-    # Original design for cluster means
     ggplot2::geom_point(data = cluster_means, ggplot2::aes(x = mean_Age, y = mean_Value), shape = 4, size = 5, color = "red", stroke = 2) +
     ggplot2::facet_wrap(~Gender, labeller = as_labeller(function(x) paste(x, "Population"))) +
     ggplot2::labs(title = plot_title,
                   x = age_col_name, y = value_col_name, color = "Cluster") +
-    # Original color palette
     ggplot2::scale_color_brewer(palette = "Set1") +
     ggplot2::scale_fill_brewer(palette = "Set1") +
-    # Theme adjustments based on your feedback
     ggplot2::theme_light() +
     ggplot2::theme(
       plot.title = ggplot2::element_text(size = 20, face = "bold", hjust = 0.5, margin = ggplot2::margin(b = 20)),
       strip.text = ggplot2::element_text(size = 14, face = "bold", color = "black"),
-      # Light grey box for facet labels with no contour line
       strip.background = ggplot2::element_rect(fill = "#EEEEEE", color = NA),
       axis.title.x = ggplot2::element_text(size = 14, margin = ggplot2::margin(t = 10)),
       axis.title.y = ggplot2::element_text(size = 14, margin = ggplot2::margin(r = 10)),
@@ -128,7 +105,6 @@ plot_value_age <- function(df, value_col_name, age_col_name) {
       legend.text = ggplot2::element_text(size = 10, color = "black"),
       legend.position = "bottom",
       legend.background = ggplot2::element_rect(fill = "white", color = "grey90", size = 0.5, linetype = "solid"),
-      # Boxed plot with lighter lines
       panel.border = ggplot2::element_rect(colour = "#CCCCCC", fill = NA, size = 1),
       panel.grid.major = ggplot2::element_line(color = "#F0F0F0", size = 0.5),
       panel.grid.minor = ggplot2::element_blank()
@@ -138,12 +114,15 @@ plot_value_age <- function(df, value_col_name, age_col_name) {
 # A new, centralized function to run the GMM on a data subset
 run_gmm_analysis_on_subset <- function(data_subset, gender_label, value_col_name, age_col_name, message_rv, progress_increment) {
     if (nrow(data_subset) > 0) {
+        # Conditionally applies Yeo-Johnson transformation
         yj_result <- apply_conditional_yeo_johnson(data_subset$Value)
         data_subset$Value_transformed <- yj_result$transformed_data
         
+        # Standardizes both value and age columns
         data_subset$Value_z <- z_transform(data_subset$Value_transformed)
         data_subset$Age_z <- z_transform(data_subset$Age)
         
+        # Increments progress bar and runs the GMM analysis
         incProgress(progress_increment, detail = paste("Running GMM for", gender_label, "data (BIC)..."))
         
         gmm_model <- tryCatch({
@@ -153,15 +132,18 @@ run_gmm_analysis_on_subset <- function(data_subset, gender_label, value_col_name
             NULL
         })
 
+        # Stops if the model could not be generated
         if (is.null(gmm_model)) {
             stop(paste("GMM model for", gender_label, "data could not be generated."))
         }
         
+        # Assigns clusters and returns the results
         data_clustered <- assign_clusters(data_subset, gmm_model)
         data_clustered$cluster <- as.factor(data_clustered$cluster)
 
         return(list(model = gmm_model, clustered_data = data_clustered, transformed_flag = yj_result$transformation_applied))
     } else {
+        # Displays an error if the data subset is empty
         message_rv(list(text = paste("Error: No", tolower(gender_label), "data found after filtering. Please check the gender column and selection."), type = "error"))
         return(list(model = NULL, clustered_data = NULL, transformed_flag = FALSE))
     }
@@ -189,18 +171,19 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
   }
 
   # Observer for GMM file upload
-  # Reads the uploaded Excel file and updates column selectors based on likely names
   observeEvent(input$gmm_file_upload, {
     req(input$gmm_file_upload)
     tryCatch({
+      # Reads the uploaded data and updates selectors
       data <- readxl::read_excel(input$gmm_file_upload$datapath)
       gmm_uploaded_data_rv(data)
       message_rv(list(text = "GMM data uploaded successfully.", type = "success"))
 
       col_names <- colnames(data)
-      # Add "None" as a choice for the gender column
+      # Adds "None" as a choice for the gender column
       all_col_choices_with_none <- c("None" = "", col_names)
 
+      # Automatically selects likely columns
       updateSelectInput(session, "gmm_value_col", choices = all_col_choices_with_none, selected = guess_column(col_names, c("Value", "Result", "Measurement", "Waarde", "HGB", "hgb", "HB", "hb")))
       updateSelectInput(session, "gmm_age_col", choices = all_col_choices_with_none, selected = guess_column(col_names, c("Age", "age", "leeftijd")))
       updateSelectInput(session, "gmm_gender_col", choices = all_col_choices_with_none, selected = guess_column(col_names, c("Gender", "gender", "Sex", "sex", "geslacht")))
@@ -220,7 +203,6 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
   })
 
   # Observer for GMM analysis button
-  # This is the core logic for the GMM tab, running the analysis with progress updates
   observeEvent(input$run_gmm_analysis_btn, {
     # Custom checks for user-friendly error messages
     if (is.null(gmm_uploaded_data_rv())) {
@@ -228,7 +210,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
       return(NULL)
     }
     
-    # NEW ERROR HANDLING: Check that columns have been selected
+    # Checks that columns have been selected
     if (input$gmm_value_col == "" || input$gmm_age_col == "") {
       message_rv(list(text = "Please select the columns from the dropdown menus.", type = "error"))
       return(NULL)
@@ -236,7 +218,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
 
     data_check <- gmm_uploaded_data_rv()
 
-    # NEW ERROR HANDLING: Check if selected columns exist in the data
+    # Checks if selected columns exist in the data
     if (!(input$gmm_value_col %in% colnames(data_check))) {
       message_rv(list(text = paste0("Error: The selected column for Values ('", input$gmm_value_col, "') was not found in your uploaded data. Please select a valid column."), type = "error"))
       return(NULL)
@@ -245,38 +227,37 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
       message_rv(list(text = paste0("Error: The selected column for Age ('", input$gmm_age_col, "') was not found in your uploaded data. Please select a valid column."), type = "error"))
       return(NULL)
     }
-    # NEW ERROR HANDLING: Check if a selected gender column exists in the data
+    # Checks if a selected gender column exists in the data
     if (input$gmm_gender_col != "" && !(input$gmm_gender_col %in% colnames(data_check))) {
       message_rv(list(text = paste0("Error: The selected gender column '", input$gmm_gender_col, "' was not found in your uploaded data. Please select a valid column."), type = "error"))
       return(NULL)
     }
 
-    # NEW ERROR HANDLING: Check if the same column is selected for Value and Age
+    # Checks if the same column is selected for Value and Age
     if (input$gmm_value_col == input$gmm_age_col) {
       message_rv(list(text = "Error: The same column cannot be selected for both Values and Age. Please choose a different column for one of the inputs.", type = "error"))
       return(NULL)
     }
-
     # End of custom checks
 
-    # Check for gender choice requirement only if a gender column is selected
+    # Checks for gender choice requirement only if a gender column is selected
     if (input$gmm_gender_col != "") {
       req(input$gmm_gender_choice)
     }
 
+    # Prevents analysis if one is already running
     if (analysis_running_rv()) {
       message_rv(list(text = "An analysis is already running. Please wait.", type = "warning"))
       return(NULL)
     }
 
-    # Start by clearing reactive values, which will trigger the UI to update with a blank state
+    # Starts by clearing reactive values, which will trigger the UI to update with a blank state
     gmm_processed_data_rv(NULL)
     gmm_models_bic_rv(list(male=NULL, female=NULL))
     message_rv(list(text = "Starting new GMM analysis...", type = "info"))
 
-
     analysis_running_rv(TRUE)
-    # Disable the analyze button and change its text
+    # Disables the analyze button and changes its text
     shinyjs::disable("run_gmm_analysis_btn")
     shinyjs::runjs("$('#run_gmm_analysis_btn').text('Analyzing...');")
     session$sendCustomMessage('analysisStatus', TRUE)
@@ -291,11 +272,11 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
         gender_col <- input$gmm_gender_col
         gender_choice <- if (gender_col == "") "None" else input$gmm_gender_choice
         
-        # Define columns to select dynamically to prevent crashing
+        # Defines columns to select dynamically to prevent crashing
         value_col_sym <- rlang::sym(value_col)
         age_col_sym <- rlang::sym(age_col)
   
-        # Select columns explicitly based on whether a gender column is selected
+        # Selects columns explicitly based on whether a gender column is selected
         if (gender_col != "") {
           gender_col_sym <- rlang::sym(gender_col)
           gmm_data <- data %>%
@@ -305,16 +286,15 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym)
         }
         
-        # --- UPDATED: Data Cleaning Steps ---
-        # Convert Value and Age columns to numeric, coercing non-numeric values to NA
+        # Data cleaning steps: converts to numeric and removes NA rows
         gmm_data <- gmm_data %>%
           mutate(
             Value = as.numeric(as.character(Value)),
             Age = as.numeric(as.character(Age))
           ) %>%
-          # Remove any rows where either the Value or Age column is NA
           na.omit()
   
+        # Displays an error if no complete rows remain after cleaning
         if (nrow(gmm_data) == 0) {
           message_rv(list(text = "No complete rows for GMM after data cleaning and NA removal. Check your data or selections.", type = "error"))
           return(NULL)
@@ -322,7 +302,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
   
         incProgress(0.2, detail = "Splitting data by gender and transforming...")
   
-        # Standardize gender column if present
+        # Standardizes gender column if present
         if (gender_col != "") {
           gmm_data <- gmm_data %>%
             mutate(Gender = case_when(
@@ -332,7 +312,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             )) %>%
             filter(Gender %in% c("Male", "Female"))
         } else {
-          # If no gender column, create a dummy group
+          # If no gender column, creates a dummy group
           gmm_data <- gmm_data %>%
             mutate(Gender = "Combined")
         }
@@ -350,10 +330,10 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
         male_gmm_model_bic <- NULL
         female_gmm_model_bic <- NULL
         
-        # Use a list to store results for easier processing
+        # Uses a list to store results for easier processing
         results <- list(male = NULL, female = NULL, combined = NULL)
   
-        # Process data based on gender selection
+        # Processes data based on gender selection
         if (gender_col == "" || gender_choice == "Both") {
           if (gender_col == "") {
             message("Running GMM on combined data...")
@@ -371,7 +351,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
               combined_clustered_data <- dplyr::bind_rows(combined_clustered_data, results$combined$clustered_data)
             }
           } else {
-            # Process Male data
+            # Processes Male data
             male_data <- gmm_data %>% dplyr::filter(Gender == "Male")
             results$male <- run_gmm_analysis_on_subset(
               data_subset = male_data,
@@ -387,7 +367,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
               combined_clustered_data <- dplyr::bind_rows(combined_clustered_data, results$male$clustered_data)
             }
   
-            # Process Female data
+            # Processes Female data
             female_data <- gmm_data %>% dplyr::filter(Gender == "Female")
             results$female <- run_gmm_analysis_on_subset(
               data_subset = female_data,
@@ -435,7 +415,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
           }
         }
         
-        # Update reactive values with the correct models and transformation details
+        # Updates reactive values with the correct models and transformation details
         gmm_models_bic_rv(list(
           combined = combined_gmm_model_bic,
           male = male_gmm_model_bic,
@@ -446,6 +426,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
           female_value_transformed = female_value_transformed_flag
         ))
   
+        # Updates the reactive value with processed data if available
         if (nrow(combined_clustered_data) > 0) {
           gmm_processed_data_rv(list(bic = combined_clustered_data))
           message_rv(list(text = "GMM analysis complete!", type = "success"))
@@ -457,10 +438,11 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
         incProgress(0.1, detail = "Generating plots and summaries...")
       })
     }, error = function(e) {
-      # Handle any analysis errors here
+      # Handles any analysis errors
       message_rv(list(text = paste("Analysis Error:", e$message), type = "danger"))
       gmm_processed_data_rv(NULL)
     }, finally = {
+      # Re-enables the button and resets its text
       analysis_running_rv(FALSE)
       shinyjs::enable("run_gmm_analysis_btn")
       shinyjs::runjs("$('#run_gmm_analysis_btn').text('Analyze');")
@@ -470,7 +452,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
 
   # Observer for the Reset button on the GMM tab
   observeEvent(input$reset_gmm_analysis_btn, {
-    # Reset all reactive values, allowing the UI to update automatically
+    # Resets all reactive values, allowing the UI to update automatically
     gmm_uploaded_data_rv(NULL)
     gmm_processed_data_rv(NULL)
     gmm_transformation_details_rv(list(male_value_transformed = FALSE, female_value_transformed = FALSE))
@@ -478,11 +460,13 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
     shinyjs::reset("gmm_file_upload")
     message_rv(list(text = "GMM data and results reset.", type = "info"))
     
+    # Resets select inputs
     updateSelectInput(session, "gmm_value_col", choices = c("None" = ""), selected = "")
     updateSelectInput(session, "gmm_age_col", choices = c("None" = ""), selected = "")
     updateSelectInput(session, "gmm_gender_col", choices = c("None" = ""), selected = "")
   })
 
+  # Renders the UI for GMM results
   output$gmm_results_ui <- renderUI({
     plot_data_bic <- gmm_processed_data_rv()$bic
 
@@ -494,18 +478,19 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
       div(class = "output-box",
           h4(class = "gmm-title", "BIC Criterion Results"),
           plotOutput("gmm_bic_plots", height = "400px"),
-          div(class = "spacing-div"), # This adds spacing after the BIC plot
+          div(class = "spacing-div"), # Adds spacing after the BIC plot
           plotOutput("plot_output_gmm_bic", height = "600px"),
-          div(class = "spacing-div"), # This adds spacing before the summary
+          div(class = "spacing-div"), # Adds spacing before the summary
           verbatimTextOutput("gmm_summary_output_bic")
       )
     )
   })
   
+  # Renders the BIC plots
   output$gmm_bic_plots <- renderPlot({
     models <- gmm_models_bic_rv()
 
-    # Set new graphical parameters to reduce top margin and adjust title position
+    # Sets new graphical parameters to reduce top margin and adjust title position
     old_par <- par(no.readonly = TRUE)
     on.exit(par(old_par))
     par(mar = c(5.1, 4.1, 1.1, 2.1), mgp = c(2.5, 1, 0))
@@ -514,6 +499,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
     has_male_model <- !is.null(models$male)
     has_female_model <- !is.null(models$female)
 
+    # Plots the combined model or male/female models side-by-side
     if (has_combined_model) {
       if (!is.null(models$combined) && !inherits(models$combined, "try-error")) {
         plot_title <- paste0("BIC Plot for ", input$gmm_value_col, " and ", input$gmm_age_col, " (Combined)")
@@ -543,6 +529,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
     }
   })
 
+  # Renders the scatter plot with clusters
   output$plot_output_gmm_bic <- renderPlot({
     plot_data <- gmm_processed_data_rv()$bic
     if (is.null(plot_data) || nrow(plot_data) == 0) {
@@ -553,6 +540,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
                 age_col_name = input$gmm_age_col)
   })  
 
+ # Renders the summary of GMM results
  output$gmm_summary_output_bic <- renderPrint({
     plot_data <- gmm_processed_data_rv()$bic
     models <- gmm_models_bic_rv()
@@ -563,6 +551,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
 
     cat("--- GMM Analysis Summary (BIC Criterion) ---\n")
     
+    # Prints summary for the combined model
     if (!is.null(models$combined) && !inherits(models$combined, "try-error")) {
         cat("\n--- Combined Subpopulations ---\n")
         
@@ -579,11 +568,13 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             sd_value <- sd(cluster_data$Value, na.rm = TRUE)
             sd_age <- sd(cluster_data$Age, na.rm = TRUE)
             
+            # Prints cluster statistics
             cat(paste0("  Mean ", input$gmm_value_col, ": ", round(mean_value, 3), "\n"))
             cat(paste0("  Mean ", input$gmm_age_col, ": ", round(mean_age, 3), "\n"))
             cat(paste0("  Std Dev ", input$gmm_value_col, ": ", round(sd_value, 3), "\n"))
             cat(paste0("  Std Dev ", input$gmm_age_col, ": ", round(sd_age, 3), "\n"))
             
+            # Estimates age range for the cluster
             if (!is.na(sd_age)) {
               lower_age <- round(mean_age - 2 * sd_age, 1)
               upper_age <- round(mean_age + 2 * sd_age, 1)
@@ -594,6 +585,7 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             cat("\n")
         }
     } else {
+        # Prints summaries for male and female models if they exist
         if (!is.null(models$male) && !inherits(models$male, "try-error")) {
             cat("\n--- Male Subpopulations ---\n")
             
