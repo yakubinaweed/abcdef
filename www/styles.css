@@ -120,7 +120,6 @@
   margin-top: 3rem; /* Adjust this value to increase or decrease the spacing */
 }
 
-/* Add this new CSS rule to your existing styles.css file */
 .disabled-tab-link {
   pointer-events: none; /* Prevents cursor events */
   color: #ccc !important; /* Changes text color to grey */

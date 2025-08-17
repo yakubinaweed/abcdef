@@ -96,6 +96,8 @@ ui <- navbarPage(
 Before running the GMM, the data is preprocessed: the selected value's column is conditionally transformed using the Yeo-Johnson method if it shows significant skewness, and both the value and age columns are standardized (z-transformed)."),
     sidebarLayout(
       sidebarPanel(
+        h5("GMM Analysis", style = "font-weight: bold;"),
+        hr(),
         fileInput(inputId = "gmm_file_upload", label = "Upload Data (Excel File)", accept = c(".xlsx")),
         hr(),
         # Dynamic inputs for selecting Value, Age, and Gender columns for GMM
@@ -118,7 +120,7 @@ Before running the GMM, the data is preprocessed: the selected value's column is
     )
   ),
   
-  # New tab for Parallel RefineR Analysis
+  # Third tab for Parallel RefineR Analysis
   tabPanel(
     title = "Parallel Analysis",
     useShinyjs(),
@@ -156,7 +158,7 @@ Before running the GMM, the data is preprocessed: the selected value's column is
         uiOutput("parallel_message")
       ),
       mainPanel(
-        # New tabsetPanel for organizing parallel results
+        # Panel for organizing parallel results
         tabsetPanel(
           tabPanel("Individual Results", 
                    uiOutput("parallel_results_ui")
