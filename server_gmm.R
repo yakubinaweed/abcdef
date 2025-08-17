@@ -68,49 +68,6 @@ assign_clusters <- function(df, gmm_model) {
   return(df)
 }
 
-# Function to plot age vs a generic value colored by cluster
-plot_value_age <- function(df, value_col_name, age_col_name) {
-  if (is.null(df) || nrow(df) == 0) {
-    return(ggplot2::ggplot() + ggplot2::annotate("text", x = 0.5, y = 0.5, label = "No GMM data available for plotting.", size = 6, color = "grey50"))
-  }
-
-  plot_title <- paste(value_col_name, "vs", age_col_name, "by Subpopulation Cluster")
-  
-  # Calculates cluster means for plotting
-  cluster_means <- df %>%
-    dplyr::group_by(Gender, cluster) %>%
-    dplyr::summarise(mean_Age = mean(Age, na.rm = TRUE),
-                     mean_Value = mean(Value, na.rm = TRUE),
-                     .groups = 'drop')
-
-  # Creates the ggplot scatter plot
-  ggplot2::ggplot(df, ggplot2::aes(x = Age, y = Value, color = factor(cluster))) +
-    ggplot2::geom_point(position = ggplot2::position_jitter(width = 0.2, height = 0.2), alpha = 0.6) +
-    ggplot2::stat_ellipse(geom = "polygon", ggplot2::aes(fill = factor(cluster)), alpha = 0.2, show.legend = FALSE, level = 0.95) +
-    ggplot2::geom_point(data = cluster_means, ggplot2::aes(x = mean_Age, y = mean_Value), shape = 4, size = 5, color = "red", stroke = 2) +
-    ggplot2::facet_wrap(~Gender, labeller = as_labeller(function(x) paste(x, "Population"))) +
-    ggplot2::labs(title = plot_title,
-                  x = age_col_name, y = value_col_name, color = "Cluster") +
-    ggplot2::scale_color_brewer(palette = "Set1") +
-    ggplot2::scale_fill_brewer(palette = "Set1") +
-    ggplot2::theme_light() +
-    ggplot2::theme(
-      plot.title = ggplot2::element_text(size = 20, face = "bold", hjust = 0.5, margin = ggplot2::margin(b = 20)),
-      strip.text = ggplot2::element_text(size = 14, face = "bold", color = "black"),
-      strip.background = ggplot2::element_rect(fill = "#EEEEEE", color = NA),
-      axis.title.x = ggplot2::element_text(size = 14, margin = ggplot2::margin(t = 10)),
-      axis.title.y = ggplot2::element_text(size = 14, margin = ggplot2::margin(r = 10)),
-      axis.text = ggplot2::element_text(size = 11, color = "black"),
-      legend.title = ggplot2::element_text(size = 12, face = "bold"),
-      legend.text = ggplot2::element_text(size = 10, color = "black"),
-      legend.position = "bottom",
-      legend.background = ggplot2::element_rect(fill = "white", color = "grey90", size = 0.5, linetype = "solid"),
-      panel.border = ggplot2::element_rect(colour = "#CCCCCC", fill = NA, size = 1),
-      panel.grid.major = ggplot2::element_line(color = "#F0F0F0", size = 0.5),
-      panel.grid.minor = ggplot2::element_blank()
-    )
-}
-
 # A new, centralized function to run the GMM on a data subset
 run_gmm_analysis_on_subset <- function(data_subset, gender_label, value_col_name, age_col_name, message_rv, progress_increment) {
     if (nrow(data_subset) > 0) {
@@ -286,6 +243,9 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             dplyr::select(Value = !!value_col_sym, Age = !!age_col_sym)
         }
         
+        # Store original row count before cleaning
+        original_rows_count <- nrow(gmm_data)
+        
         # Data cleaning steps: converts to numeric and removes NA rows
         gmm_data <- gmm_data %>%
           mutate(
@@ -293,7 +253,10 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
             Age = as.numeric(as.character(Age))
           ) %>%
           na.omit()
-  
+      
+        # Calculate removed row count
+        removed_rows_count <- original_rows_count - nrow(gmm_data)
+
         # Displays an error if no complete rows remain after cleaning
         if (nrow(gmm_data) == 0) {
           message_rv(list(text = "No complete rows for GMM after data cleaning and NA removal. Check your data or selections.", type = "error"))
@@ -426,9 +389,9 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
           female_value_transformed = female_value_transformed_flag
         ))
   
-        # Updates the reactive value with processed data if available
+        # Updates the reactive value with processed data and the removed row count
         if (nrow(combined_clustered_data) > 0) {
-          gmm_processed_data_rv(list(bic = combined_clustered_data))
+          gmm_processed_data_rv(list(bic = combined_clustered_data, removed_rows = removed_rows_count))
           message_rv(list(text = "GMM analysis complete!", type = "success"))
         } else {
           message_rv(list(text = "No data available after GMM processing for plotting/summary.", type = "error"))
@@ -542,14 +505,17 @@ gmmServer <- function(input, output, session, gmm_uploaded_data_rv, gmm_processe
 
  # Renders the summary of GMM results
  output$gmm_summary_output_bic <- renderPrint({
-    plot_data <- gmm_processed_data_rv()$bic
-    models <- gmm_models_bic_rv()
+    results <- gmm_processed_data_rv()
     
-    if (is.null(plot_data) || nrow(plot_data) == 0) {
+    if (is.null(results) || nrow(results$bic) == 0) {
       return("No GMM analysis results to display.")
     }
-
+    
     cat("--- GMM Analysis Summary (BIC Criterion) ---\n")
+    cat(paste0("Note: ", results$removed_rows, " rows were removed due to missing data.\n"))
+    
+    plot_data <- results$bic
+    models <- gmm_models_bic_rv()
     
     # Prints summary for the combined model
     if (!is.null(models$combined) && !inherits(models$combined, "try-error")) {
