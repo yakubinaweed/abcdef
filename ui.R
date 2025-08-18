@@ -7,6 +7,7 @@ library(shinyjs)
 library(shinyWidgets)
 library(shinyFiles)
 library(ggplot2)
+library(bsicons)
 
 ui <- navbarPage(
   title = "RefineR Reference Interval Estimation",
@@ -91,16 +92,20 @@ ui <- navbarPage(
   tabPanel(
     title = "Subpopulation Detection (GMM)",
     useShinyjs(),
-    p("Gaussian Mixture Models aim to detect hidden subpopulations within your data based on a selected value and age. This tool employs the mclust package, which automatically selects the best model and number of components based on the Bayesian Information Criterion (BIC). For each detected subpopulation, estimated age ranges are provided directly from the model's characteristics, avoiding predefined bins.
-
-Before running the GMM, the data is preprocessed: the selected value's column is conditionally transformed using the Yeo-Johnson method if it shows significant skewness, and both the value and age columns are standardized (z-transformed)."),
     sidebarLayout(
       sidebarPanel(
         # Start of card container
         div(class = "card", style = "border: 1px solid #ccc; border-radius: 8px;",
           # Card header with title
           div(class = "card-header", style = "background-color: #f7f7f7; padding: 10px; border-bottom: 1px solid #ccc; border-top-left-radius: 8px; border-top-right-radius: 8px;",
-            h5("GMM Analysis", style = "margin-top: 0; margin-bottom: 0;")
+            # Applied tooltip to the h5 header
+            h5(
+              tooltip(
+                trigger = list("GMM Analysis", bs_icon("info-circle")),
+                "Gaussian Mixture Models (GMM) detect hidden subpopulations. The mclust package selects the best model and components using BIC. Data is preprocessed with Yeo-Johnson transformation (if skewed) and standardization for values and age."
+              ),
+              style = "margin-top: 0; margin-bottom: 0;"
+            )
           ),
           # Card body containing the existing sidebar content
           div(class = "card-body", style = "padding: 15px;",
